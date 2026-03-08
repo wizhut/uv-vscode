@@ -12,6 +12,13 @@ const DEP_SECTIONS = [
     '[dependency-groups',
 ];
 
+// Available Python 3.x versions (newest first)
+const PYTHON_VERSIONS = [
+    '3.14', '3.13', '3.12', '3.11', '3.10',
+    '3.9', '3.8', '3.7', '3.6', '3.5',
+    '3.4', '3.3', '3.2', '3.1', '3.0',
+];
+
 /**
  * Determine if the given lineIndex is inside a dependency array
  * by scanning backwards to find the relevant TOML section and key.
@@ -437,6 +444,20 @@ export function activate(context: vscode.ExtensionContext) {
                     }
                 }
 
+                // Add "Select Python version" action for requires-python
+                if (pyMatch) {
+                    const selectPyAction = new vscode.CodeAction(
+                        'Select Python version…',
+                        vscode.CodeActionKind.QuickFix
+                    );
+                    selectPyAction.command = {
+                        command: 'uv.selectPythonVersion',
+                        title: 'Select Python Version',
+                        arguments: [document.uri, lineIndex, lineText, pyMatch[1], pyMatch[5]]
+                    };
+                    actions.push(selectPyAction);
+                }
+
                 return actions;
             }
         },
@@ -472,7 +493,23 @@ export function activate(context: vscode.ExtensionContext) {
         }
     });
 
-    context.subscriptions.push(uvSyncCmd, uvAddCmd, uvRunCmd, pypiHoverProvider, pypiCodeActionProvider, versionBumpProvider, upgradeVersionCmd, selectVersionCmd);
+    // Command: Show QuickPick for Python versions and replace requires-python
+    const selectPythonVersionCmd = vscode.commands.registerCommand('uv.selectPythonVersion', async (uri: vscode.Uri, lineIndex: number, originalLine: string, prefix: string, suffix: string) => {
+        const selected = await vscode.window.showQuickPick(PYTHON_VERSIONS, {
+            title: 'Select Python Version'
+        });
+
+        if (selected) {
+            const newText = `${prefix}${selected}${suffix}`;
+            const edit = new vscode.WorkspaceEdit();
+            const document = await vscode.workspace.openTextDocument(uri);
+            const line = document.lineAt(lineIndex);
+            edit.replace(uri, line.range, newText);
+            await vscode.workspace.applyEdit(edit);
+        }
+    });
+
+    context.subscriptions.push(uvSyncCmd, uvAddCmd, uvRunCmd, pypiHoverProvider, pypiCodeActionProvider, versionBumpProvider, upgradeVersionCmd, selectVersionCmd, selectPythonVersionCmd);
 }
 
 export function deactivate() { }

@@ -28,9 +28,11 @@ Place your cursor on the `version = "x.y.z"` line under `[project]` and bump the
 
 ![Version bump](contrib/screenshots/version-bump.png)
 
-### 🐍 Python Version Bumping
+### 🐍 Python Version Management
 
 Same bump actions on the `requires-python` line. Supports both 2-part (`>=3.14`) and 3-part (`>=3.14.1`) versions.
+
+Additionally, use **"Select Python version…"** to pick from all Python 3.x releases (3.0–3.14) via a quick pick menu.
 
 ### 🔧 Hover Information
 
