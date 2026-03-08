@@ -12,12 +12,53 @@ const DEP_SECTIONS = [
     '[dependency-groups',
 ];
 
-// Available Python 3.x versions (newest first)
-const PYTHON_VERSIONS = [
+// Fallback Python 3.x versions (newest first) used when the API is unreachable
+const FALLBACK_PYTHON_VERSIONS = [
     '3.14', '3.13', '3.12', '3.11', '3.10',
     '3.9', '3.8', '3.7', '3.6', '3.5',
     '3.4', '3.3', '3.2', '3.1', '3.0',
 ];
+
+let pythonVersionCache: { quickFix: string[]; all: string[] } | null = null;
+
+async function fetchPythonVersions(): Promise<{ quickFix: string[]; all: string[] }> {
+    if (pythonVersionCache) {
+        return pythonVersionCache;
+    }
+    return new Promise((resolve) => {
+        https.get('https://endoflife.date/api/python.json', (res: any) => {
+            if (res.statusCode !== 200) {
+                resolve({ quickFix: FALLBACK_PYTHON_VERSIONS.slice(0, 5), all: FALLBACK_PYTHON_VERSIONS });
+                return;
+            }
+            let data = '';
+            res.on('data', (chunk: any) => data += chunk);
+            res.on('end', () => {
+                try {
+                    const cycles: Array<{ cycle: string; latest: string }> = JSON.parse(data);
+                    const python3 = cycles.filter(c => {
+                        const parts = c.cycle.split('.');
+                        return parseInt(parts[0], 10) === 3;
+                    });
+                    // Quick fix: latest patch release of each major version >= 3.10
+                    const quickFix = python3
+                        .filter(c => parseInt(c.cycle.split('.')[1], 10) >= 10)
+                        .map(c => c.latest);
+                    // All versions: latest patch release of each major version >= 3.1
+                    const all = python3
+                        .filter(c => parseInt(c.cycle.split('.')[1], 10) >= 1)
+                        .map(c => c.latest);
+                    pythonVersionCache = { quickFix, all };
+                    resolve(pythonVersionCache);
+                } catch {
+                    resolve({ quickFix: FALLBACK_PYTHON_VERSIONS.slice(0, 5), all: FALLBACK_PYTHON_VERSIONS });
+                }
+            });
+        }).on('error', () => {
+            resolve({ quickFix: FALLBACK_PYTHON_VERSIONS.slice(0, 5), all: FALLBACK_PYTHON_VERSIONS });
+        });
+    });
+}
 
 /**
  * Determine if the given lineIndex is inside a dependency array
@@ -347,7 +388,7 @@ export function activate(context: vscode.ExtensionContext) {
     const versionBumpProvider = vscode.languages.registerCodeActionsProvider(
         { language: 'toml' },
         {
-            provideCodeActions(document, range) {
+            async provideCodeActions(document, range) {
                 if (!document.fileName.endsWith('pyproject.toml')) {
                     return [];
                 }
@@ -402,58 +443,36 @@ export function activate(context: vscode.ExtensionContext) {
                 const pyMatch = lineText.match(PYTHON_VERSION_REGEX);
                 if (pyMatch) {
                     const prefix = pyMatch[1];
-                    const major = parseInt(pyMatch[2], 10);
-                    const minor = parseInt(pyMatch[3], 10);
-                    const hasPatch = pyMatch[4] !== undefined;
-                    const patch = hasPatch ? parseInt(pyMatch[4], 10) : 0;
                     const suffix = pyMatch[5];
+                    const currentPyVersion = pyMatch[4] !== undefined
+                        ? `${pyMatch[2]}.${pyMatch[3]}.${pyMatch[4]}`
+                        : `${pyMatch[2]}.${pyMatch[3]}`;
 
-                    if (hasPatch) {
-                        // 3-part: >=3.14.1 → bump patch, minor, major
-                        const bumps: [string, string][] = [
-                            [`${major}.${minor}.${patch + 1}`, 'patch'],
-                            [`${major}.${minor + 1}.0`, 'minor'],
-                            [`${major + 1}.0.0`, 'major'],
-                        ];
-                        for (const [newVersion, label] of bumps) {
-                            const action = new vscode.CodeAction(
-                                `Bump Python ${label} → ${newVersion}`,
-                                vscode.CodeActionKind.QuickFix
-                            );
-                            const edit = new vscode.WorkspaceEdit();
-                            edit.replace(document.uri, fullLineRange, `${prefix}${newVersion}${suffix}`);
-                            action.edit = edit;
-                            actions.push(action);
-                        }
-                    } else {
-                        // 2-part: >=3.14 → bump minor, major
-                        const bumps: [string, string][] = [
-                            [`${major}.${minor + 1}`, 'minor'],
-                            [`${major + 1}.0`, 'major'],
-                        ];
-                        for (const [newVersion, label] of bumps) {
-                            const action = new vscode.CodeAction(
-                                `Bump Python ${label} → ${newVersion}`,
-                                vscode.CodeActionKind.QuickFix
-                            );
-                            const edit = new vscode.WorkspaceEdit();
-                            edit.replace(document.uri, fullLineRange, `${prefix}${newVersion}${suffix}`);
-                            action.edit = edit;
-                            actions.push(action);
-                        }
+                    // Fetch real Python versions from endoflife.date API
+                    const pyVersions = await fetchPythonVersions();
+
+                    // Show latest release of each major version as direct quick-fix actions
+                    const quickFixItems = pyVersions.quickFix.filter(v => v !== currentPyVersion);
+                    for (const ver of quickFixItems) {
+                        const action = new vscode.CodeAction(
+                            `Python ${ver}`,
+                            vscode.CodeActionKind.QuickFix
+                        );
+                        const edit = new vscode.WorkspaceEdit();
+                        edit.replace(document.uri, fullLineRange, `${prefix}${ver}${suffix}`);
+                        action.edit = edit;
+                        actions.push(action);
                     }
-                }
 
-                // Add "Select Python version" action for requires-python
-                if (pyMatch) {
+                    // "More Python versions…" opens the full picker
                     const selectPyAction = new vscode.CodeAction(
-                        'Select Python version…',
+                        'More Python versions…',
                         vscode.CodeActionKind.QuickFix
                     );
                     selectPyAction.command = {
                         command: 'uv.selectPythonVersion',
                         title: 'Select Python Version',
-                        arguments: [document.uri, lineIndex, lineText, pyMatch[1], pyMatch[5]]
+                        arguments: [document.uri, lineIndex, lineText, prefix, suffix, pyVersions.all]
                     };
                     actions.push(selectPyAction);
                 }
@@ -494,8 +513,9 @@ export function activate(context: vscode.ExtensionContext) {
     });
 
     // Command: Show QuickPick for Python versions and replace requires-python
-    const selectPythonVersionCmd = vscode.commands.registerCommand('uv.selectPythonVersion', async (uri: vscode.Uri, lineIndex: number, originalLine: string, prefix: string, suffix: string) => {
-        const selected = await vscode.window.showQuickPick(PYTHON_VERSIONS, {
+    const selectPythonVersionCmd = vscode.commands.registerCommand('uv.selectPythonVersion', async (uri: vscode.Uri, lineIndex: number, originalLine: string, prefix: string, suffix: string, versions?: string[]) => {
+        const versionList = versions || (await fetchPythonVersions()).all;
+        const selected = await vscode.window.showQuickPick(versionList, {
             title: 'Select Python Version'
         });
 

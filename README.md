@@ -28,11 +28,9 @@ Place your cursor on the `version = "x.y.z"` line under `[project]` and bump the
 
 ![Version bump](contrib/screenshots/version-bump.png)
 
-### 🐍 Python Version Management
+### 🐍 Python Version Selection
 
-Same bump actions on the `requires-python` line. Supports both 2-part (`>=3.14`) and 3-part (`>=3.14.1`) versions.
-
-Additionally, use **"Select Python version…"** to pick from all Python 3.x releases (3.0–3.14) via a quick pick menu.
+Place your cursor on the `requires-python` line to quickly switch Python versions. Quick-fix actions show the latest patch release of each major version from 3.10 onwards (e.g., 3.14.3, 3.13.12, …), fetched dynamically from the [endoflife.date](https://endoflife.date/python) API. Choose **"More Python versions…"** to browse all versions from 3.1 onwards.
 
 ### 🔧 Hover Information
 
