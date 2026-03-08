@@ -9,6 +9,7 @@
     },
     "version": "0.1.2",
     "license": "MIT",
+    "icon": "icon.png",
     "author": {
         "name": "Vassilios Karakoidas",
         "email": "vassilios.karakoidas@wizhut.tech"
