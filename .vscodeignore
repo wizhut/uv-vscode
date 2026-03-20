@@ -1,0 +1,32 @@
+# Source & config (compiled output in out/ is enough)
+src/**
+tsconfig.json
+CLAUDE.md
+
+# Dev tooling
+.vscode/**
+.vscode-test/**
+.claude/**
+
+# Dependencies (this extension has no runtime deps — all are devDependencies)
+node_modules/**
+
+# Build artifacts & packaging
+*.vsix
+package-lock.json
+
+# Git & misc
+.git/**
+.gitignore
+
+# Screenshots & contribution assets
+contrib/**
+
+# Quickstart doc (if it exists)
+vsc-extension-quickstart.md
+
+# Source maps
+**/*.map
+
+# TypeScript source in out (if any .ts ends up there)
+out/**/*.ts
