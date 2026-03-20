@@ -529,7 +529,266 @@ export function activate(context: vscode.ExtensionContext) {
         }
     });
 
-    context.subscriptions.push(uvSyncCmd, uvAddCmd, uvRunCmd, pypiHoverProvider, pypiCodeActionProvider, versionBumpProvider, upgradeVersionCmd, selectVersionCmd, selectPythonVersionCmd);
+    // Command: Show Dependencies Dashboard
+    const showDependenciesCmd = vscode.commands.registerCommand('uv.showDependencies', async () => {
+        const editor = vscode.window.activeTextEditor;
+        if (!editor || !editor.document.fileName.endsWith('pyproject.toml')) {
+            vscode.window.showWarningMessage('Open a pyproject.toml file first.');
+            return;
+        }
+
+        const document = editor.document;
+        const uri = document.uri;
+
+        // Collect all dependencies from the document
+        interface DepInfo {
+            name: string;
+            versionSpec: string;
+            currentVersion: string;
+            lineIndex: number;
+            lineText: string;
+        }
+        const deps: DepInfo[] = [];
+
+        for (let lineIndex = 0; lineIndex < document.lineCount; lineIndex++) {
+            if (!isInDependencySection(document, lineIndex)) {
+                continue;
+            }
+            const lineText = document.lineAt(lineIndex).text;
+            const depMatch = lineText.match(DEP_LINE_REGEX);
+            if (!depMatch) { continue; }
+
+            const packageName = depMatch[1];
+            const versionSpec = depMatch[2] || '';
+            const currentVersion = depMatch[3] || '';
+
+            deps.push({ name: packageName, versionSpec, currentVersion, lineIndex, lineText });
+        }
+
+        if (deps.length === 0) {
+            vscode.window.showInformationMessage('No dependencies found in this file.');
+            return;
+        }
+
+        // Create webview panel
+        const panel = vscode.window.createWebviewPanel(
+            'uvDependencies',
+            'UV: Dependencies',
+            vscode.ViewColumn.One,
+            { enableScripts: true }
+        );
+
+        // Show loading state
+        panel.webview.html = getDependencyHtml([], true);
+
+        // Fetch PyPI data for all dependencies
+        interface DepRow {
+            name: string;
+            currentVersion: string;
+            latestVersion: string;
+            versionSpec: string;
+            lineIndex: number;
+            lineText: string;
+            upToDate: boolean;
+            error: boolean;
+        }
+        const rows: DepRow[] = [];
+
+        const results = await Promise.allSettled(
+            deps.map(async (dep) => {
+                if (!dep.currentVersion || dep.currentVersion === '*') {
+                    return { ...dep, latestVersion: 'N/A', upToDate: true, error: false };
+                }
+                try {
+                    const pypiData = await fetchPypiData(dep.name);
+                    const latestVersion = pypiData.info.version;
+                    return { ...dep, latestVersion, upToDate: latestVersion === dep.currentVersion, error: false };
+                } catch {
+                    return { ...dep, latestVersion: 'error', upToDate: false, error: true };
+                }
+            })
+        );
+
+        for (const result of results) {
+            if (result.status === 'fulfilled') {
+                rows.push(result.value);
+            }
+        }
+
+        panel.webview.html = getDependencyHtml(rows, false);
+
+        // Handle messages from webview
+        panel.webview.onDidReceiveMessage(async (message: { command: string; name: string; lineIndex: number; lineText: string; versionSpec: string; currentVersion: string; latestVersion: string }) => {
+            if (message.command === 'upgrade') {
+                const doc = await vscode.workspace.openTextDocument(uri);
+                const line = doc.lineAt(message.lineIndex);
+                const escapedSpec = message.versionSpec.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+                const escapedVer = message.currentVersion.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+                const newText = line.text.replace(
+                    new RegExp(`(${escapedSpec})${escapedVer}`),
+                    `${message.versionSpec}${message.latestVersion}`
+                );
+                const edit = new vscode.WorkspaceEdit();
+                edit.replace(uri, line.range, newText);
+                await vscode.workspace.applyEdit(edit);
+                await doc.save();
+
+                // Update the row in the webview
+                panel.webview.postMessage({ command: 'upgraded', name: message.name, latestVersion: message.latestVersion });
+            } else if (message.command === 'upgradeAll') {
+                const doc = await vscode.workspace.openTextDocument(uri);
+                // Apply edits bottom-up so line indices stay valid
+                const outdated = rows
+                    .filter(r => !r.upToDate && !r.error && r.currentVersion && r.currentVersion !== '*')
+                    .sort((a, b) => b.lineIndex - a.lineIndex);
+
+                const edit = new vscode.WorkspaceEdit();
+                for (const row of outdated) {
+                    const line = doc.lineAt(row.lineIndex);
+                    const escapedSpec = row.versionSpec.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+                    const escapedVer = row.currentVersion.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+                    const newText = line.text.replace(
+                        new RegExp(`(${escapedSpec})${escapedVer}`),
+                        `${row.versionSpec}${row.latestVersion}`
+                    );
+                    edit.replace(uri, line.range, newText);
+                }
+                await vscode.workspace.applyEdit(edit);
+                await doc.save();
+
+                panel.webview.postMessage({ command: 'allUpgraded' });
+            }
+        }, undefined, context.subscriptions);
+    });
+
+    context.subscriptions.push(uvSyncCmd, uvAddCmd, uvRunCmd, pypiHoverProvider, pypiCodeActionProvider, versionBumpProvider, upgradeVersionCmd, selectVersionCmd, selectPythonVersionCmd, showDependenciesCmd);
+}
+
+function getDependencyHtml(rows: Array<{ name: string; currentVersion: string; latestVersion: string; versionSpec: string; lineIndex: number; lineText: string; upToDate: boolean; error: boolean }>, loading: boolean): string {
+    const hasOutdated = rows.some(r => !r.upToDate && !r.error);
+
+    const tableRows = rows.map(row => {
+        const statusCell = row.error
+            ? '<span class="error">&#x26A0; fetch error</span>'
+            : row.upToDate
+                ? '<span class="ok">&#x2714;</span>'
+                : `<button class="upgrade-btn" data-name="${escapeHtml(row.name)}" data-line="${row.lineIndex}" data-linetext="${escapeHtml(row.lineText)}" data-spec="${escapeHtml(row.versionSpec)}" data-current="${escapeHtml(row.currentVersion)}" data-latest="${escapeHtml(row.latestVersion)}">Upgrade</button>`;
+
+        return `<tr id="row-${escapeHtml(row.name)}" class="${row.upToDate ? '' : row.error ? 'row-error' : 'row-outdated'}">
+            <td class="name"><a href="https://pypi.org/project/${escapeHtml(row.name)}/">${escapeHtml(row.name)}</a></td>
+            <td class="version">${escapeHtml(row.currentVersion || 'any')}</td>
+            <td class="version">${escapeHtml(row.latestVersion)}</td>
+            <td class="status">${statusCell}</td>
+        </tr>`;
+    }).join('\n');
+
+    return `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<style>
+    body {
+        font-family: var(--vscode-font-family);
+        color: var(--vscode-foreground);
+        background: var(--vscode-editor-background);
+        padding: 16px;
+    }
+    h1 { font-size: 1.4em; margin-bottom: 4px; }
+    .subtitle { color: var(--vscode-descriptionForeground); margin-bottom: 16px; }
+    table { width: 100%; border-collapse: collapse; }
+    th, td { text-align: left; padding: 6px 12px; border-bottom: 1px solid var(--vscode-widget-border); }
+    th { color: var(--vscode-descriptionForeground); font-weight: 600; font-size: 0.85em; text-transform: uppercase; }
+    .name a { color: var(--vscode-textLink-foreground); text-decoration: none; }
+    .name a:hover { text-decoration: underline; }
+    .version { font-family: var(--vscode-editor-font-family); }
+    .ok { color: var(--vscode-testing-iconPassed); font-size: 1.2em; }
+    .error { color: var(--vscode-testing-iconErrored); font-size: 0.85em; }
+    .row-outdated .version:nth-child(2) { color: var(--vscode-errorForeground); }
+    .upgrade-btn, .upgrade-all-btn {
+        background: var(--vscode-button-background);
+        color: var(--vscode-button-foreground);
+        border: none;
+        padding: 3px 10px;
+        border-radius: 2px;
+        cursor: pointer;
+        font-size: 0.85em;
+    }
+    .upgrade-btn:hover, .upgrade-all-btn:hover {
+        background: var(--vscode-button-hoverBackground);
+    }
+    .upgrade-all-btn { margin-bottom: 16px; padding: 5px 14px; font-size: 0.9em; }
+    .loading { text-align: center; padding: 40px; color: var(--vscode-descriptionForeground); }
+    .summary { margin-bottom: 12px; font-size: 0.9em; color: var(--vscode-descriptionForeground); }
+</style>
+</head>
+<body>
+    <h1>Dependencies</h1>
+    ${loading ? '<div class="loading">Fetching dependency info from PyPI...</div>' : `
+    <p class="summary">${rows.length} dependencies &mdash; ${rows.filter(r => r.upToDate).length} up to date, ${rows.filter(r => !r.upToDate && !r.error).length} outdated${rows.some(r => r.error) ? `, ${rows.filter(r => r.error).length} errors` : ''}</p>
+    ${hasOutdated ? '<button class="upgrade-all-btn" id="upgradeAllBtn">Upgrade All</button>' : ''}
+    <table>
+        <thead><tr><th>Package</th><th>Current</th><th>Latest</th><th>Status</th></tr></thead>
+        <tbody>${tableRows}</tbody>
+    </table>
+    <script>
+        const vscode = acquireVsCodeApi();
+
+        document.querySelectorAll('.upgrade-btn').forEach(btn => {
+            btn.addEventListener('click', () => {
+                btn.disabled = true;
+                btn.textContent = 'Upgrading...';
+                vscode.postMessage({
+                    command: 'upgrade',
+                    name: btn.dataset.name,
+                    lineIndex: parseInt(btn.dataset.line),
+                    lineText: btn.dataset.linetext,
+                    versionSpec: btn.dataset.spec,
+                    currentVersion: btn.dataset.current,
+                    latestVersion: btn.dataset.latest
+                });
+            });
+        });
+
+        const upgradeAllBtn = document.getElementById('upgradeAllBtn');
+        if (upgradeAllBtn) {
+            upgradeAllBtn.addEventListener('click', () => {
+                upgradeAllBtn.disabled = true;
+                upgradeAllBtn.textContent = 'Upgrading all...';
+                document.querySelectorAll('.upgrade-btn').forEach(btn => {
+                    btn.disabled = true;
+                    btn.textContent = 'Upgrading...';
+                });
+                vscode.postMessage({ command: 'upgradeAll' });
+            });
+        }
+
+        window.addEventListener('message', event => {
+            const msg = event.data;
+            if (msg.command === 'upgraded') {
+                const row = document.getElementById('row-' + msg.name);
+                if (row) {
+                    row.className = '';
+                    row.querySelector('.version:nth-child(2)').textContent = msg.latestVersion;
+                    row.querySelector('.status').innerHTML = '<span class="ok">&#x2714;</span>';
+                }
+            } else if (msg.command === 'allUpgraded') {
+                document.querySelectorAll('.row-outdated').forEach(row => {
+                    const latest = row.querySelector('.version:nth-child(3)').textContent;
+                    row.className = '';
+                    row.querySelector('.version:nth-child(2)').textContent = latest;
+                    row.querySelector('.status').innerHTML = '<span class="ok">&#x2714;</span>';
+                });
+                if (upgradeAllBtn) { upgradeAllBtn.remove(); }
+            }
+        });
+    </script>`}
+</body>
+</html>`;
+}
+
+function escapeHtml(text: string): string {
+    return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
 
 export function deactivate() { }
