@@ -36,6 +36,14 @@ Place your cursor on the `requires-python` line to quickly switch Python version
 
 Hover over a package name in a dependency section to see its latest PyPI version with a link to the project page.
 
+### 📊 Dependency Dashboard
+
+Run **UV: Show Dependencies** from the command palette to open an interactive webview panel that lists all your dependencies with:
+
+- **Package name** and **current version**
+- **Latest version** from PyPI
+- **Status indicator** — ✅ if up-to-date, or an **Upgrade** button to update outdated packages
+
 ### 🖥️ UV Commands
 
 Run common `uv` commands directly from the command palette (`Cmd+Shift+P`):
@@ -45,6 +53,7 @@ Run common `uv` commands directly from the command palette (`Cmd+Shift+P`):
 | `UV: Sync` | Run `uv sync` |
 | `UV: Add` | Add a package via `uv add` |
 | `UV: Run` | Run a command via `uv run` |
+| `UV: Show Dependencies` | Open the dependency dashboard |
 
 ## Supported Sections
 
