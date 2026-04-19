@@ -3,3 +3,4 @@ out
 .vscode
 package-lock.json
 .vsix
+.claude/settings.local.json
