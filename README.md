@@ -106,7 +106,14 @@ npm run watch
 
 # Run unit tests (parser + requirements.txt)
 npm test
+
+# Build .vsix for both registries (output in dist/)
+npm run package           # vscode + openvsx
+npm run package:vscode    # VS Code Marketplace only
+npm run package:openvsx   # Open VSX only
 ```
+
+The two registries require different `(name, publisher)` pairs. Edit [`build/targets.json`](build/targets.json) to change them. The script overrides `package.json` in place during each build and restores it afterwards.
 
 Press `F5` to launch the Extension Development Host for testing.
 

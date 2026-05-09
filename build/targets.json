@@ -1,0 +1,12 @@
+{
+    "vscode": {
+        "_comment": "VS Code Marketplace listing (wizhut-tech.wiz-practical-uv).",
+        "name": "wiz-practical-uv",
+        "publisher": "wizhut-tech"
+    },
+    "openvsx": {
+        "_comment": "Open VSX Registry: legacy identity (wizhut.uv-vscode).",
+        "name": "uv-vscode",
+        "publisher": "wizhut"
+    }
+}

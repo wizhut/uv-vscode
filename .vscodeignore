@@ -20,6 +20,9 @@ out/test/**
 # Build artifacts & packaging
 *.vsix
 package-lock.json
+dist/**
+build/**
+scripts/**
 
 # Git & misc
 .git/**
