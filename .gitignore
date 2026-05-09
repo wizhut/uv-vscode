@@ -2,5 +2,6 @@ node_modules
 out
 .vscode
 package-lock.json
-.vsix
+*.vsix
+dist/
 .claude/settings.local.json
