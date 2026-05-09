@@ -8,8 +8,14 @@ CLAUDE.md
 .vscode-test/**
 .claude/**
 
-# Dependencies (this extension has no runtime deps — all are devDependencies)
+# Dependencies — only bundle declared runtime deps
 node_modules/**
+!node_modules/@iarna
+!node_modules/@iarna/toml
+!node_modules/@iarna/toml/**
+
+# Compiled tests (not part of the extension)
+out/test/**
 
 # Build artifacts & packaging
 *.vsix

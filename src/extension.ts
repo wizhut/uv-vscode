@@ -1,18 +1,19 @@
 import * as vscode from 'vscode';
 import * as https from 'https';
+import * as path from 'path';
+import {
+    DepLocation,
+    ParsedDocument,
+    SnapshotState,
+    buildSnapshot,
+    depsOnLine,
+    findDepAtPosition,
+    hasVersionUpdates,
+    parseDocument,
+} from './parser';
 
 const pypiCache = new Map<string, any>();
 
-// Regex for PEP 621 dependency array items: "package>=1.0.0" or "package[extra]>=1.0.0"
-const DEP_LINE_REGEX = /^\s*"([a-zA-Z0-9_][a-zA-Z0-9._\-]*)(?:\[.*?\])?\s*(?:(>=|<=|~=|==|!=|>|<|===)\s*([0-9][0-9a-zA-Z\.\*]*))?"/;
-
-// Sections that contain dependency arrays
-const DEP_SECTIONS = [
-    '[project]',
-    '[dependency-groups',
-];
-
-// Fallback Python 3.x versions (newest first) used when the API is unreachable
 const FALLBACK_PYTHON_VERSIONS = [
     '3.14', '3.13', '3.12', '3.11', '3.10',
     '3.9', '3.8', '3.7', '3.6', '3.5',
@@ -20,6 +21,14 @@ const FALLBACK_PYTHON_VERSIONS = [
 ];
 
 let pythonVersionCache: { quickFix: string[]; all: string[] } | null = null;
+
+function isPyprojectTomlDocument(document: vscode.TextDocument): boolean {
+    const scheme = document.uri.scheme;
+    if (scheme === 'output' || scheme === 'debug') {
+        return false;
+    }
+    return path.basename(document.fileName).toLowerCase() === 'pyproject.toml';
+}
 
 async function fetchPythonVersions(): Promise<{ quickFix: string[]; all: string[] }> {
     if (pythonVersionCache) {
@@ -40,11 +49,9 @@ async function fetchPythonVersions(): Promise<{ quickFix: string[]; all: string[
                         const parts = c.cycle.split('.');
                         return parseInt(parts[0], 10) === 3;
                     });
-                    // Quick fix: latest patch release of each major version >= 3.10
                     const quickFix = python3
                         .filter(c => parseInt(c.cycle.split('.')[1], 10) >= 10)
                         .map(c => c.latest);
-                    // All versions: latest patch release of each major version >= 3.1
                     const all = python3
                         .filter(c => parseInt(c.cycle.split('.')[1], 10) >= 1)
                         .map(c => c.latest);
@@ -58,43 +65,6 @@ async function fetchPythonVersions(): Promise<{ quickFix: string[]; all: string[
             resolve({ quickFix: FALLBACK_PYTHON_VERSIONS.slice(0, 5), all: FALLBACK_PYTHON_VERSIONS });
         });
     });
-}
-
-/**
- * Determine if the given lineIndex is inside a dependency array
- * by scanning backwards to find the relevant TOML section and key.
- */
-function isInDependencySection(document: vscode.TextDocument, lineIndex: number): boolean {
-    // Walk backwards to find context
-    let insideBracketArray = false;
-    for (let i = lineIndex; i >= 0; i--) {
-        const text = document.lineAt(i).text.trim();
-
-        // If we hit a line that starts a TOML table section, check if it's a dep section
-        if (text.startsWith('[')) {
-            // [dependency-groups] or [dependency-groups.dev] etc.
-            if (text.startsWith('[dependency-groups')) {
-                return true;
-            }
-            // [project] section — but only if we traced back through a dependencies key
-            if (text === '[project]' && insideBracketArray) {
-                return true;
-            }
-            // Any other section means we're not in deps
-            return false;
-        }
-
-        // Check for dependency-related keys like `dependencies = [` or `optional-dependencies.X = [`
-        if (/^(?:dependencies|optional-dependencies\b.*)\s*=\s*\[/.test(text)) {
-            insideBracketArray = true;
-        }
-
-        // If we hit the close of the array before finding a dep key, we're outside
-        if (text === ']' && i < lineIndex) {
-            return false;
-        }
-    }
-    return false;
 }
 
 async function fetchPypiData(packageName: string): Promise<any> {
@@ -125,9 +95,14 @@ async function fetchPypiData(packageName: string): Promise<any> {
 export function activate(context: vscode.ExtensionContext) {
     const outputChannel = vscode.window.createOutputChannel('UV PyPI');
     outputChannel.appendLine('uv-vscode extension is now active!');
+    outputChannel.show(true);
+    vscode.window.setStatusBarMessage('Practical UV extension active', 5000);
     console.log('uv-vscode extension is now active!');
+    const pyprojectSelector: vscode.DocumentSelector = [
+        { language: 'toml', pattern: '**/pyproject.toml' },
+        { pattern: '**/pyproject.toml' }
+    ];
 
-    // Helper to run commands in the terminal
     const runInTerminal = (commandName: string, commandText: string) => {
         let terminal = vscode.window.terminals.find(t => t.name === 'uv');
         if (!terminal) {
@@ -137,13 +112,11 @@ export function activate(context: vscode.ExtensionContext) {
         terminal.sendText(commandText);
     };
 
-    // uv sync
     const uvSyncCmd = vscode.commands.registerCommand('uv.sync', () => {
         runInTerminal('uv sync', 'uv sync');
         vscode.window.showInformationMessage('Running uv sync...');
     });
 
-    // uv add
     const uvAddCmd = vscode.commands.registerCommand('uv.add', async () => {
         const packageName = await vscode.window.showInputBox({
             prompt: 'Enter the package name to add (e.g., requests, fastapi)',
@@ -156,7 +129,6 @@ export function activate(context: vscode.ExtensionContext) {
         }
     });
 
-    // uv run
     const uvRunCmd = vscode.commands.registerCommand('uv.run', async () => {
         const commandToRun = await vscode.window.showInputBox({
             prompt: 'Enter the command or script to run (e.g., python main.py, pytest)',
@@ -169,64 +141,61 @@ export function activate(context: vscode.ExtensionContext) {
         }
     });
 
-    // Diagnostic Collection for Outdated Packages
     const diagnosticCollection = vscode.languages.createDiagnosticCollection('uv-pypi');
     context.subscriptions.push(diagnosticCollection);
 
     let timeout: NodeJS.Timeout | undefined = undefined;
+    const lastSavedSnapshot = new Map<string, SnapshotState>();
+    const parsedDocCache = new Map<string, { version: number; parsed: ParsedDocument }>();
+
+    function getParsedDocument(document: vscode.TextDocument): ParsedDocument {
+        const key = document.uri.toString();
+        const cached = parsedDocCache.get(key);
+        if (cached && cached.version === document.version) {
+            return cached.parsed;
+        }
+        const parsed = parseDocument(document.getText());
+        parsedDocCache.set(key, { version: document.version, parsed });
+        if (parsed.error) {
+            outputChannel.appendLine(`[parser] TOML parse error: ${parsed.error.message}`);
+        }
+        return parsed;
+    }
 
     async function updateDiagnostics(document: vscode.TextDocument) {
         outputChannel.appendLine(`[updateDiagnostics] Checking file: ${document.fileName}`);
-        if (!document.fileName.endsWith('pyproject.toml')) {
-            outputChannel.appendLine(`[updateDiagnostics] Skipping - not a pyproject.toml file`);
+        if (!isPyprojectTomlDocument(document)) {
             return;
         }
 
+        const parsed = getParsedDocument(document);
         const diagnostics: vscode.Diagnostic[] = [];
 
-        // Scan lines for dependencies
-        for (let lineIndex = 0; lineIndex < document.lineCount; lineIndex++) {
-            const line = document.lineAt(lineIndex);
-
-            // Only process lines inside dependency sections
-            if (!isInDependencySection(document, lineIndex)) {
-                if (line.text.trim().startsWith('"')) {
-                    outputChannel.appendLine(`[updateDiagnostics] Line ${lineIndex} looks like a dep but isInDependencySection=false: ${line.text.trim()}`);
-                }
+        for (const dep of parsed.deps) {
+            outputChannel.appendLine(`[updateDiagnostics] Found dependency: ${dep.packageName} ${dep.versionSpec} ${dep.currentVersion}`);
+            if (!dep.currentVersion || dep.currentVersion === '*') {
                 continue;
             }
-
-            const depMatch = line.text.match(DEP_LINE_REGEX);
-            if (!depMatch) {
-                outputChannel.appendLine(`[updateDiagnostics] Line ${lineIndex} in dep section but no regex match: ${line.text.trim()}`);
-                continue;
-            }
-            outputChannel.appendLine(`[updateDiagnostics] Found dependency: ${depMatch[1]} ${depMatch[2] || ''} ${depMatch[3] || ''}`);
-
-            const packageName = depMatch[1];
-            const versionSpec = depMatch[2] || '';  // >=, ==, etc.
-            const currentVersion = depMatch[3] || '';
-
-            if (!currentVersion || currentVersion === '*') continue;
 
             try {
-                const pypiData = await fetchPypiData(packageName);
+                const pypiData = await fetchPypiData(dep.packageName);
                 const latestVersion = pypiData.info.version;
-                outputChannel.appendLine(`[updateDiagnostics] ${packageName}: current=${currentVersion}, latest=${latestVersion}`);
+                outputChannel.appendLine(`[updateDiagnostics] ${dep.packageName}: current=${dep.currentVersion}, latest=${latestVersion}`);
 
-                if (latestVersion !== currentVersion) {
-                    // Highlight the version portion of the line
-                    const versionInLine = versionSpec + currentVersion;
-                    const startPos = line.text.indexOf(versionInLine);
-                    if (startPos !== -1) {
+                if (latestVersion !== dep.currentVersion) {
+                    const lineText = document.lineAt(dep.line).text;
+                    const versionInItem = dep.versionSpec + dep.currentVersion;
+                    const relativeStart = lineText.slice(dep.contentStart, dep.contentEnd).indexOf(versionInItem);
+                    if (relativeStart !== -1) {
+                        const startPos = dep.contentStart + relativeStart;
                         const range = new vscode.Range(
-                            new vscode.Position(lineIndex, startPos),
-                            new vscode.Position(lineIndex, startPos + versionInLine.length)
+                            new vscode.Position(dep.line, startPos),
+                            new vscode.Position(dep.line, startPos + versionInItem.length)
                         );
 
                         const diagnostic = new vscode.Diagnostic(
                             range,
-                            `${packageName} is outdated. Latest version is ${latestVersion}`,
+                            `${dep.packageName} is outdated. Latest version is ${latestVersion}`,
                             vscode.DiagnosticSeverity.Error
                         );
                         diagnostic.source = 'uv-pypi';
@@ -234,7 +203,7 @@ export function activate(context: vscode.ExtensionContext) {
                     }
                 }
             } catch (e: any) {
-                outputChannel.appendLine(`[updateDiagnostics] Error fetching ${packageName}: ${e.message}`);
+                outputChannel.appendLine(`[updateDiagnostics] Error fetching ${dep.packageName}: ${e.message}`);
             }
         }
 
@@ -242,6 +211,9 @@ export function activate(context: vscode.ExtensionContext) {
     }
 
     function triggerUpdateDiagnostics(document: vscode.TextDocument) {
+        if (!isPyprojectTomlDocument(document)) {
+            return;
+        }
         if (timeout) {
             clearTimeout(timeout);
         }
@@ -249,6 +221,10 @@ export function activate(context: vscode.ExtensionContext) {
     }
 
     if (vscode.window.activeTextEditor) {
+        const activeDoc = vscode.window.activeTextEditor.document;
+        if (isPyprojectTomlDocument(activeDoc)) {
+            lastSavedSnapshot.set(activeDoc.uri.toString(), buildSnapshot(getParsedDocument(activeDoc)));
+        }
         triggerUpdateDiagnostics(vscode.window.activeTextEditor.document);
     }
 
@@ -259,39 +235,77 @@ export function activate(context: vscode.ExtensionContext) {
         vscode.workspace.onDidChangeTextDocument(event => {
             triggerUpdateDiagnostics(event.document);
         }),
+        vscode.workspace.onDidOpenTextDocument(document => {
+            if (!isPyprojectTomlDocument(document)) {
+                return;
+            }
+            lastSavedSnapshot.set(document.uri.toString(), buildSnapshot(getParsedDocument(document)));
+        }),
+        vscode.workspace.onDidSaveTextDocument(async document => {
+            if (!isPyprojectTomlDocument(document)) {
+                return;
+            }
+
+            const key = document.uri.toString();
+            const previous = lastSavedSnapshot.get(key);
+            const current = buildSnapshot(getParsedDocument(document));
+            const { dependencyChanged, projectVersionChanged } = hasVersionUpdates(previous, current);
+
+            if (dependencyChanged || projectVersionChanged) {
+                const parts: string[] = [];
+                if (dependencyChanged) {
+                    parts.push('package versions');
+                }
+                if (projectVersionChanged) {
+                    parts.push('project version');
+                }
+
+                const selection = await vscode.window.showInformationMessage(
+                    `Detected updates to ${parts.join(' and ')}. Run uv sync now?`,
+                    'Run uv sync',
+                    'Later'
+                );
+
+                if (selection === 'Run uv sync') {
+                    runInTerminal('uv sync', 'uv sync');
+                    vscode.window.showInformationMessage('Running uv sync...');
+                }
+            }
+
+            lastSavedSnapshot.set(key, current);
+        }),
         vscode.workspace.onDidCloseTextDocument(document => {
             diagnosticCollection.delete(document.uri);
+            const key = document.uri.toString();
+            parsedDocCache.delete(key);
+            if (isPyprojectTomlDocument(document)) {
+                lastSavedSnapshot.delete(key);
+            }
         })
     );
 
-    // PyPI Version Hover Provider
-    const pypiHoverProvider = vscode.languages.registerHoverProvider({ language: 'toml' }, {
+    const pypiHoverProvider = vscode.languages.registerHoverProvider(pyprojectSelector, {
         async provideHover(document, position, token) {
             outputChannel.appendLine(`[hover] provideHover called at line ${position.line}`);
-            if (!document.fileName.endsWith('pyproject.toml')) {
+            if (!isPyprojectTomlDocument(document)) {
                 return null;
             }
 
-            if (!isInDependencySection(document, position.line)) {
-                return null;
-            }
+            const parsed = getParsedDocument(document);
+            const dep = findDepAtPosition(parsed, position.line, position.character);
+            if (!dep) return null;
 
-            const lineText = document.lineAt(position.line).text;
-            const depMatch = lineText.match(DEP_LINE_REGEX);
-            if (!depMatch) return null;
-
-            const packageName = depMatch[1];
             const wordRange = document.getWordRangeAtPosition(position, /[a-zA-Z0-9_][a-zA-Z0-9._\-]*/);
             if (!wordRange) return null;
             const hoveredWord = document.getText(wordRange);
-            if (hoveredWord !== packageName) return null;
+            if (hoveredWord !== dep.packageName) return null;
 
             try {
-                const pypiData = await fetchPypiData(packageName);
+                const pypiData = await fetchPypiData(dep.packageName);
                 const latestVersion = pypiData.info.version;
                 const markdown = new vscode.MarkdownString();
                 markdown.isTrusted = true;
-                markdown.appendMarkdown(`**PyPI: ${packageName}**\n\nLatest version: \`${latestVersion}\`\n\n[View on PyPI](https://pypi.org/project/${packageName}/)`);
+                markdown.appendMarkdown(`**PyPI: ${dep.packageName}**\n\nLatest version: \`${latestVersion}\`\n\n[View on PyPI](https://pypi.org/project/${dep.packageName}/)`);
                 return new vscode.Hover(markdown, wordRange);
             } catch (err: any) {
                 outputChannel.appendLine(`[hover] Error: ${err.message}`);
@@ -300,58 +314,47 @@ export function activate(context: vscode.ExtensionContext) {
         }
     });
 
-    // PyPI Version Code Action Provider (Quick Fixes)
     const pypiCodeActionProvider = vscode.languages.registerCodeActionsProvider(
-        { language: 'toml' },
+        pyprojectSelector,
         {
             async provideCodeActions(document, range, context, token) {
-                if (!document.fileName.endsWith('pyproject.toml')) {
+                if (!isPyprojectTomlDocument(document)) {
                     return [];
                 }
 
+                const parsed = getParsedDocument(document);
                 const lineIndex = range.start.line;
-                if (!isInDependencySection(document, lineIndex)) {
+                const lineDeps = depsOnLine(parsed, lineIndex);
+                if (lineDeps.length === 0) {
+                    return [];
+                }
+                const dep = findDepAtPosition(parsed, lineIndex, range.start.character) || lineDeps[0];
+
+                if (!dep.currentVersion || dep.currentVersion === '*') {
                     return [];
                 }
 
                 const lineText = document.lineAt(lineIndex).text;
-                const depMatch = lineText.match(DEP_LINE_REGEX);
-                if (!depMatch) {
-                    return [];
-                }
-
-                const packageName = depMatch[1];
-                const versionSpec = depMatch[2] || '';  // >=, ==, etc.
-                const currentVersion = depMatch[3] || '';
-
-                if (!currentVersion || currentVersion === '*') {
-                    return [];
-                }
 
                 try {
-                    const pypiData = await fetchPypiData(packageName);
+                    const pypiData = await fetchPypiData(dep.packageName);
                     const latestVersion = pypiData.info.version;
                     const allVersions = Object.keys(pypiData.releases).sort((a, b) => b.localeCompare(a, undefined, { numeric: true, sensitivity: 'base' }));
 
                     const actions: vscode.CodeAction[] = [];
 
                     const createReplacementLine = (newVer: string) => {
-                        // Replace the version number in the original line
-                        return lineText.replace(
-                            new RegExp(`(${versionSpec.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')})${currentVersion.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`),
-                            `${versionSpec}${newVer}`
-                        );
+                        const newItem = `${dep.packageWithExtras}${dep.versionSpec}${newVer}`;
+                        return lineText.slice(0, dep.contentStart) + newItem + lineText.slice(dep.contentEnd);
                     };
 
-                    // Action 1: Upgrade to latest (if newer) — applied directly as a workspace edit
-                    if (latestVersion !== currentVersion) {
-                        const upgradeAction = new vscode.CodeAction(`Upgrade ${packageName} to latest (${latestVersion})`, vscode.CodeActionKind.QuickFix);
+                    if (latestVersion !== dep.currentVersion) {
+                        const upgradeAction = new vscode.CodeAction(`Upgrade ${dep.packageName} to latest (${latestVersion})`, vscode.CodeActionKind.QuickFix);
                         const edit = new vscode.WorkspaceEdit();
                         const fullLineRange = document.lineAt(lineIndex).range;
                         edit.replace(document.uri, fullLineRange, createReplacementLine(latestVersion));
                         upgradeAction.edit = edit;
 
-                        // Associate action with the diagnostic on this line to ensure the lightbulb shows!
                         const lineDiagnostics = context.diagnostics.filter(d => d.range.start.line === lineIndex);
                         if (lineDiagnostics.length > 0) {
                             upgradeAction.diagnostics = lineDiagnostics;
@@ -361,12 +364,11 @@ export function activate(context: vscode.ExtensionContext) {
                         actions.push(upgradeAction);
                     }
 
-                    // Select specific version
-                    const selectAction = new vscode.CodeAction(`Select version for ${packageName}...`, vscode.CodeActionKind.QuickFix);
+                    const selectAction = new vscode.CodeAction(`Select version for ${dep.packageName}...`, vscode.CodeActionKind.QuickFix);
                     selectAction.command = {
                         command: 'uv.selectVersion',
                         title: 'Select Version',
-                        arguments: [document.uri, lineIndex, allVersions, lineText, versionSpec, currentVersion]
+                        arguments: [document.uri, lineIndex, allVersions, lineText, dep.contentStart, dep.contentEnd, `${dep.packageWithExtras}${dep.versionSpec}`]
                     };
                     actions.push(selectAction);
 
@@ -382,21 +384,20 @@ export function activate(context: vscode.ExtensionContext) {
 
     // Project Version & Python Version Bump Code Action Provider
     // Matches: version = "1.2.3" or requires-python = ">=3.14" / ">=3.14.1"
-    const VERSION_LINE_REGEX = /^(\s*version\s*=\s*")([\d]+)\.([\d]+)\.([\d]+)(")/;
-    const PYTHON_VERSION_REGEX = /^(\s*requires-python\s*=\s*"(?:>=|<=|~=|==|!=|>|<|===)?)([\d]+)\.([\d]+)(?:\.([\d]+))?(")/;
+    const VERSION_LINE_REGEX = /^(\s*version\s*=\s*["'])([\d]+)\.([\d]+)\.([\d]+)(["'])/;
+    const PYTHON_VERSION_REGEX = /^(\s*requires-python\s*=\s*["'](?:>=|<=|~=|==|!=|>|<|===)?)([\d]+)\.([\d]+)(?:\.([\d]+))?(["'])/;
 
     const versionBumpProvider = vscode.languages.registerCodeActionsProvider(
-        { language: 'toml' },
+        pyprojectSelector,
         {
             async provideCodeActions(document, range) {
-                if (!document.fileName.endsWith('pyproject.toml')) {
+                if (!isPyprojectTomlDocument(document)) {
                     return [];
                 }
 
                 const lineIndex = range.start.line;
                 const lineText = document.lineAt(lineIndex).text;
 
-                // Verify we're inside [project]
                 let inProject = false;
                 for (let i = lineIndex; i >= 0; i--) {
                     const t = document.lineAt(i).text.trim();
@@ -412,7 +413,6 @@ export function activate(context: vscode.ExtensionContext) {
                 const actions: vscode.CodeAction[] = [];
                 const fullLineRange = document.lineAt(lineIndex).range;
 
-                // Check for project version line
                 const versionMatch = lineText.match(VERSION_LINE_REGEX);
                 if (versionMatch) {
                     const prefix = versionMatch[1];
@@ -439,7 +439,6 @@ export function activate(context: vscode.ExtensionContext) {
                     }
                 }
 
-                // Check for requires-python line
                 const pyMatch = lineText.match(PYTHON_VERSION_REGEX);
                 if (pyMatch) {
                     const prefix = pyMatch[1];
@@ -448,10 +447,8 @@ export function activate(context: vscode.ExtensionContext) {
                         ? `${pyMatch[2]}.${pyMatch[3]}.${pyMatch[4]}`
                         : `${pyMatch[2]}.${pyMatch[3]}`;
 
-                    // Fetch real Python versions from endoflife.date API
                     const pyVersions = await fetchPythonVersions();
 
-                    // Show latest release of each major version as direct quick-fix actions
                     const quickFixItems = pyVersions.quickFix.filter(v => v !== currentPyVersion);
                     for (const ver of quickFixItems) {
                         const action = new vscode.CodeAction(
@@ -464,7 +461,6 @@ export function activate(context: vscode.ExtensionContext) {
                         actions.push(action);
                     }
 
-                    // "More Python versions…" opens the full picker
                     const selectPyAction = new vscode.CodeAction(
                         'More Python versions…',
                         vscode.CodeActionKind.QuickFix
@@ -483,7 +479,6 @@ export function activate(context: vscode.ExtensionContext) {
         { providedCodeActionKinds: [vscode.CodeActionKind.QuickFix] }
     );
 
-    // Command: Execute the version upgrade (replaces the line)
     const upgradeVersionCmd = vscode.commands.registerCommand('uv.upgradeVersion', async (uri: vscode.Uri, lineIndex: number, newText: string) => {
         const edit = new vscode.WorkspaceEdit();
         const document = await vscode.workspace.openTextDocument(uri);
@@ -492,17 +487,13 @@ export function activate(context: vscode.ExtensionContext) {
         await vscode.workspace.applyEdit(edit);
     });
 
-    // Command: Show QuickPick for versions and then upgrade
-    const selectVersionCmd = vscode.commands.registerCommand('uv.selectVersion', async (uri: vscode.Uri, lineIndex: number, versions: string[], originalLine: string, versionSpec: string, currentVersion: string) => {
+    const selectVersionCmd = vscode.commands.registerCommand('uv.selectVersion', async (uri: vscode.Uri, lineIndex: number, versions: string[], originalLine: string, itemStart: number, itemEnd: number, itemPrefix: string) => {
         const selected = await vscode.window.showQuickPick(versions, {
             title: 'Select Package Version'
         });
 
         if (selected) {
-            const newText = originalLine.replace(
-                new RegExp(`(${versionSpec.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')})${currentVersion.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`),
-                `${versionSpec}${selected}`
-            );
+            const newText = originalLine.slice(0, itemStart) + `${itemPrefix}${selected}` + originalLine.slice(itemEnd);
 
             const edit = new vscode.WorkspaceEdit();
             const document = await vscode.workspace.openTextDocument(uri);
@@ -512,7 +503,6 @@ export function activate(context: vscode.ExtensionContext) {
         }
     });
 
-    // Command: Show QuickPick for Python versions and replace requires-python
     const selectPythonVersionCmd = vscode.commands.registerCommand('uv.selectPythonVersion', async (uri: vscode.Uri, lineIndex: number, originalLine: string, prefix: string, suffix: string, versions?: string[]) => {
         const versionList = versions || (await fetchPythonVersions()).all;
         const selected = await vscode.window.showQuickPick(versionList, {
@@ -529,48 +519,22 @@ export function activate(context: vscode.ExtensionContext) {
         }
     });
 
-    // Command: Show Dependencies Dashboard
     const showDependenciesCmd = vscode.commands.registerCommand('uv.showDependencies', async () => {
         const editor = vscode.window.activeTextEditor;
-        if (!editor || !editor.document.fileName.endsWith('pyproject.toml')) {
+        if (!editor || !isPyprojectTomlDocument(editor.document)) {
             vscode.window.showWarningMessage('Open a pyproject.toml file first.');
             return;
         }
 
         const document = editor.document;
         const uri = document.uri;
+        const parsed = getParsedDocument(document);
 
-        // Collect all dependencies from the document
-        interface DepInfo {
-            name: string;
-            versionSpec: string;
-            currentVersion: string;
-            lineIndex: number;
-            lineText: string;
-        }
-        const deps: DepInfo[] = [];
-
-        for (let lineIndex = 0; lineIndex < document.lineCount; lineIndex++) {
-            if (!isInDependencySection(document, lineIndex)) {
-                continue;
-            }
-            const lineText = document.lineAt(lineIndex).text;
-            const depMatch = lineText.match(DEP_LINE_REGEX);
-            if (!depMatch) { continue; }
-
-            const packageName = depMatch[1];
-            const versionSpec = depMatch[2] || '';
-            const currentVersion = depMatch[3] || '';
-
-            deps.push({ name: packageName, versionSpec, currentVersion, lineIndex, lineText });
-        }
-
-        if (deps.length === 0) {
+        if (parsed.deps.length === 0) {
             vscode.window.showInformationMessage('No dependencies found in this file.');
             return;
         }
 
-        // Create webview panel
         const panel = vscode.window.createWebviewPanel(
             'uvDependencies',
             'UV: Dependencies',
@@ -578,10 +542,8 @@ export function activate(context: vscode.ExtensionContext) {
             { enableScripts: true }
         );
 
-        // Show loading state
         panel.webview.html = getDependencyHtml([], true);
 
-        // Fetch PyPI data for all dependencies
         interface DepRow {
             name: string;
             currentVersion: string;
@@ -595,16 +557,24 @@ export function activate(context: vscode.ExtensionContext) {
         const rows: DepRow[] = [];
 
         const results = await Promise.allSettled(
-            deps.map(async (dep) => {
+            parsed.deps.map(async (dep: DepLocation) => {
+                const lineText = document.lineAt(dep.line).text;
+                const base = {
+                    name: dep.packageName,
+                    currentVersion: dep.currentVersion,
+                    versionSpec: dep.versionSpec,
+                    lineIndex: dep.line,
+                    lineText,
+                };
                 if (!dep.currentVersion || dep.currentVersion === '*') {
-                    return { ...dep, latestVersion: 'N/A', upToDate: true, error: false };
+                    return { ...base, latestVersion: 'N/A', upToDate: true, error: false };
                 }
                 try {
-                    const pypiData = await fetchPypiData(dep.name);
+                    const pypiData = await fetchPypiData(dep.packageName);
                     const latestVersion = pypiData.info.version;
-                    return { ...dep, latestVersion, upToDate: latestVersion === dep.currentVersion, error: false };
+                    return { ...base, latestVersion, upToDate: latestVersion === dep.currentVersion, error: false };
                 } catch {
-                    return { ...dep, latestVersion: 'error', upToDate: false, error: true };
+                    return { ...base, latestVersion: 'error', upToDate: false, error: true };
                 }
             })
         );
@@ -617,7 +587,6 @@ export function activate(context: vscode.ExtensionContext) {
 
         panel.webview.html = getDependencyHtml(rows, false);
 
-        // Handle messages from webview
         panel.webview.onDidReceiveMessage(async (message: { command: string; name: string; lineIndex: number; lineText: string; versionSpec: string; currentVersion: string; latestVersion: string }) => {
             if (message.command === 'upgrade') {
                 const doc = await vscode.workspace.openTextDocument(uri);
@@ -633,11 +602,9 @@ export function activate(context: vscode.ExtensionContext) {
                 await vscode.workspace.applyEdit(edit);
                 await doc.save();
 
-                // Update the row in the webview
                 panel.webview.postMessage({ command: 'upgraded', name: message.name, latestVersion: message.latestVersion });
             } else if (message.command === 'upgradeAll') {
                 const doc = await vscode.workspace.openTextDocument(uri);
-                // Apply edits bottom-up so line indices stay valid
                 const outdated = rows
                     .filter(r => !r.upToDate && !r.error && r.currentVersion && r.currentVersion !== '*')
                     .sort((a, b) => b.lineIndex - a.lineIndex);
