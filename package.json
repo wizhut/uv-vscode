@@ -90,7 +90,9 @@
         }
     },
     "scripts": {
-        "package": "vsce package",
+        "package": "node scripts/package.js",
+        "package:vscode": "node scripts/package.js vscode",
+        "package:openvsx": "node scripts/package.js openvsx",
         "vscode:prepublish": "npm run compile",
         "compile": "tsc -p ./",
         "watch": "tsc -watch -p ./",
