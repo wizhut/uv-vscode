@@ -16,7 +16,7 @@
         "email": "vassilios.karakoidas@wizhut.tech"
     },
     "engines": {
-        "vscode": "^1.85.0"
+        "vscode": "^1.118.0"
     },
     "categories": [
         "Other"
@@ -87,7 +87,7 @@
     },
     "devDependencies": {
         "@types/node": "^25.6.2",
-        "@types/vscode": "~1.85.0",
+        "@types/vscode": "^1.118.0",
         "@vscode/vsce": "^3.9.1",
         "typescript": "^6.0.3"
     },
