@@ -74,8 +74,20 @@
             {
                 "command": "uv.showDependencies",
                 "title": "UV: Show Dependencies"
+            },
+            {
+                "command": "uv.convertToUv",
+                "title": "UV: Convert requirements.txt to uv project"
             }
-        ]
+        ],
+        "menus": {
+            "commandPalette": [
+                {
+                    "command": "uv.convertToUv",
+                    "when": "uv.requirementsActive"
+                }
+            ]
+        }
     },
     "scripts": {
         "package": "vsce package",

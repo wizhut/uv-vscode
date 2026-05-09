@@ -169,3 +169,52 @@ export function findDepAtPosition(parsed: ParsedDocument, line: number, characte
 export function depsOnLine(parsed: ParsedDocument, line: number): DepLocation[] {
     return parsed.deps.filter(d => d.line === line);
 }
+
+export function parseRequirements(text: string): ParsedDocument {
+    const lines = text.split(/\r?\n/);
+    const deps: DepLocation[] = [];
+
+    for (let i = 0; i < lines.length; i++) {
+        const line = lines[i];
+        const hashIdx = line.indexOf('#');
+        const codePart = hashIdx === -1 ? line : line.slice(0, hashIdx);
+        const trimmed = codePart.trim();
+        if (!trimmed) {
+            continue;
+        }
+        // Pip directives (-r, -e, -c, --index-url, etc.) and direct URL specs (pkg @ url)
+        if (trimmed.startsWith('-') || trimmed.includes('@')) {
+            continue;
+        }
+
+        const leading = codePart.length - codePart.trimStart().length;
+        const trailingWs = codePart.length - codePart.trimEnd().length;
+        let specEnd = codePart.length - trailingWs;
+
+        // Strip PEP 508 environment marker: `pkg==1.0; python_version >= "3.8"`
+        const semiRel = codePart.slice(leading, specEnd).indexOf(';');
+        if (semiRel !== -1) {
+            specEnd = leading + semiRel;
+            while (specEnd > leading && /\s/.test(codePart[specEnd - 1])) {
+                specEnd--;
+            }
+        }
+
+        const specText = codePart.slice(leading, specEnd);
+        const parsed = parsePep508(specText);
+        if (!parsed) {
+            continue;
+        }
+
+        deps.push({
+            ...parsed,
+            raw: specText,
+            section: 'requirements',
+            line: i,
+            contentStart: leading,
+            contentEnd: specEnd,
+        });
+    }
+
+    return { deps };
+}

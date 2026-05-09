@@ -10,6 +10,7 @@ import {
     findDepAtPosition,
     hasVersionUpdates,
     parseDocument,
+    parseRequirements,
 } from './parser';
 
 const pypiCache = new Map<string, any>();
@@ -28,6 +29,28 @@ function isPyprojectTomlDocument(document: vscode.TextDocument): boolean {
         return false;
     }
     return path.basename(document.fileName).toLowerCase() === 'pyproject.toml';
+}
+
+function isRequirementsTxtDocument(document: vscode.TextDocument): boolean {
+    const scheme = document.uri.scheme;
+    if (scheme === 'output' || scheme === 'debug') {
+        return false;
+    }
+    const base = path.basename(document.fileName).toLowerCase();
+    if (base === 'requirements.txt') {
+        return true;
+    }
+    if (/^requirements[-_].+\.txt$/.test(base)) {
+        return true;
+    }
+    if (base.endsWith('.txt') && path.basename(path.dirname(document.fileName)).toLowerCase() === 'requirements') {
+        return true;
+    }
+    return false;
+}
+
+function isSupportedDocument(document: vscode.TextDocument): boolean {
+    return isPyprojectTomlDocument(document) || isRequirementsTxtDocument(document);
 }
 
 async function fetchPythonVersions(): Promise<{ quickFix: string[]; all: string[] }> {
@@ -103,6 +126,14 @@ export function activate(context: vscode.ExtensionContext) {
         { pattern: '**/pyproject.toml' }
     ];
 
+    const supportedSelector: vscode.DocumentSelector = [
+        ...(pyprojectSelector as vscode.DocumentFilter[]),
+        { pattern: '**/requirements.txt' },
+        { pattern: '**/requirements-*.txt' },
+        { pattern: '**/requirements_*.txt' },
+        { pattern: '**/requirements/*.txt' },
+    ];
+
     const runInTerminal = (commandName: string, commandText: string) => {
         let terminal = vscode.window.terminals.find(t => t.name === 'uv');
         if (!terminal) {
@@ -154,17 +185,20 @@ export function activate(context: vscode.ExtensionContext) {
         if (cached && cached.version === document.version) {
             return cached.parsed;
         }
-        const parsed = parseDocument(document.getText());
+        const text = document.getText();
+        const parsed = isPyprojectTomlDocument(document)
+            ? parseDocument(text)
+            : parseRequirements(text);
         parsedDocCache.set(key, { version: document.version, parsed });
         if (parsed.error) {
-            outputChannel.appendLine(`[parser] TOML parse error: ${parsed.error.message}`);
+            outputChannel.appendLine(`[parser] parse error: ${parsed.error.message}`);
         }
         return parsed;
     }
 
     async function updateDiagnostics(document: vscode.TextDocument) {
         outputChannel.appendLine(`[updateDiagnostics] Checking file: ${document.fileName}`);
-        if (!isPyprojectTomlDocument(document)) {
+        if (!isSupportedDocument(document)) {
             return;
         }
 
@@ -211,7 +245,7 @@ export function activate(context: vscode.ExtensionContext) {
     }
 
     function triggerUpdateDiagnostics(document: vscode.TextDocument) {
-        if (!isPyprojectTomlDocument(document)) {
+        if (!isSupportedDocument(document)) {
             return;
         }
         if (timeout) {
@@ -220,16 +254,34 @@ export function activate(context: vscode.ExtensionContext) {
         timeout = setTimeout(() => updateDiagnostics(document), 500);
     }
 
+    const convertStatusBar = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100);
+    convertStatusBar.text = '$(arrow-up) Convert to uv';
+    convertStatusBar.tooltip = 'Run uv init / uv add -r on this requirements.txt';
+    convertStatusBar.command = 'uv.convertToUv';
+    context.subscriptions.push(convertStatusBar);
+
+    const refreshActiveDocContext = (document: vscode.TextDocument | undefined) => {
+        const isReq = !!document && isRequirementsTxtDocument(document);
+        vscode.commands.executeCommand('setContext', 'uv.requirementsActive', isReq);
+        if (isReq) {
+            convertStatusBar.show();
+        } else {
+            convertStatusBar.hide();
+        }
+    };
+
     if (vscode.window.activeTextEditor) {
         const activeDoc = vscode.window.activeTextEditor.document;
         if (isPyprojectTomlDocument(activeDoc)) {
             lastSavedSnapshot.set(activeDoc.uri.toString(), buildSnapshot(getParsedDocument(activeDoc)));
         }
-        triggerUpdateDiagnostics(vscode.window.activeTextEditor.document);
+        triggerUpdateDiagnostics(activeDoc);
+        refreshActiveDocContext(activeDoc);
     }
 
     context.subscriptions.push(
         vscode.window.onDidChangeActiveTextEditor(editor => {
+            refreshActiveDocContext(editor?.document);
             if (editor) triggerUpdateDiagnostics(editor.document);
         }),
         vscode.workspace.onDidChangeTextDocument(event => {
@@ -278,16 +330,14 @@ export function activate(context: vscode.ExtensionContext) {
             diagnosticCollection.delete(document.uri);
             const key = document.uri.toString();
             parsedDocCache.delete(key);
-            if (isPyprojectTomlDocument(document)) {
-                lastSavedSnapshot.delete(key);
-            }
+            lastSavedSnapshot.delete(key);
         })
     );
 
-    const pypiHoverProvider = vscode.languages.registerHoverProvider(pyprojectSelector, {
+    const pypiHoverProvider = vscode.languages.registerHoverProvider(supportedSelector, {
         async provideHover(document, position, token) {
             outputChannel.appendLine(`[hover] provideHover called at line ${position.line}`);
-            if (!isPyprojectTomlDocument(document)) {
+            if (!isSupportedDocument(document)) {
                 return null;
             }
 
@@ -315,10 +365,10 @@ export function activate(context: vscode.ExtensionContext) {
     });
 
     const pypiCodeActionProvider = vscode.languages.registerCodeActionsProvider(
-        pyprojectSelector,
+        supportedSelector,
         {
             async provideCodeActions(document, range, context, token) {
-                if (!isPyprojectTomlDocument(document)) {
+                if (!isSupportedDocument(document)) {
                     return [];
                 }
 
@@ -521,8 +571,8 @@ export function activate(context: vscode.ExtensionContext) {
 
     const showDependenciesCmd = vscode.commands.registerCommand('uv.showDependencies', async () => {
         const editor = vscode.window.activeTextEditor;
-        if (!editor || !isPyprojectTomlDocument(editor.document)) {
-            vscode.window.showWarningMessage('Open a pyproject.toml file first.');
+        if (!editor || !isSupportedDocument(editor.document)) {
+            vscode.window.showWarningMessage('Open a pyproject.toml or requirements.txt file first.');
             return;
         }
 
@@ -628,7 +678,53 @@ export function activate(context: vscode.ExtensionContext) {
         }, undefined, context.subscriptions);
     });
 
-    context.subscriptions.push(uvSyncCmd, uvAddCmd, uvRunCmd, pypiHoverProvider, pypiCodeActionProvider, versionBumpProvider, upgradeVersionCmd, selectVersionCmd, selectPythonVersionCmd, showDependenciesCmd);
+    const convertToUvCmd = vscode.commands.registerCommand('uv.convertToUv', async () => {
+        const editor = vscode.window.activeTextEditor;
+        if (!editor || !isRequirementsTxtDocument(editor.document)) {
+            vscode.window.showWarningMessage('Open a requirements.txt file first.');
+            return;
+        }
+
+        const reqUri = editor.document.uri;
+        const folder = vscode.workspace.getWorkspaceFolder(reqUri);
+        if (!folder) {
+            vscode.window.showWarningMessage('requirements.txt must be inside an open workspace folder.');
+            return;
+        }
+
+        const pyprojectUri = vscode.Uri.joinPath(folder.uri, 'pyproject.toml');
+        let hasPyproject = false;
+        try {
+            await vscode.workspace.fs.stat(pyprojectUri);
+            hasPyproject = true;
+        } catch {
+            hasPyproject = false;
+        }
+
+        const reqRel = path.relative(folder.uri.fsPath, reqUri.fsPath) || path.basename(reqUri.fsPath);
+        const reqArg = /\s/.test(reqRel) ? `"${reqRel}"` : reqRel;
+
+        const message = hasPyproject
+            ? `pyproject.toml already exists in ${folder.name}. Run "uv add -r ${reqRel}" to import dependencies?`
+            : `Initialize a uv project in ${folder.name} ("uv init") and import dependencies from ${reqRel}?`;
+
+        const choice = await vscode.window.showInformationMessage(message, { modal: true }, 'Convert');
+        if (choice !== 'Convert') {
+            return;
+        }
+
+        let terminal = vscode.window.terminals.find(t => t.name === 'uv');
+        if (!terminal || terminal.exitStatus !== undefined) {
+            terminal = vscode.window.createTerminal({ name: 'uv', cwd: folder.uri.fsPath });
+        }
+        terminal.show();
+        if (!hasPyproject) {
+            terminal.sendText('uv init');
+        }
+        terminal.sendText(`uv add -r ${reqArg}`);
+    });
+
+    context.subscriptions.push(uvSyncCmd, uvAddCmd, uvRunCmd, pypiHoverProvider, pypiCodeActionProvider, versionBumpProvider, upgradeVersionCmd, selectVersionCmd, selectPythonVersionCmd, showDependenciesCmd, convertToUvCmd);
 }
 
 function getDependencyHtml(rows: Array<{ name: string; currentVersion: string; latestVersion: string; versionSpec: string; lineIndex: number; lineText: string; upToDate: boolean; error: boolean }>, loading: boolean): string {
