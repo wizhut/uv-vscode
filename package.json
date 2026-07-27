@@ -8,7 +8,7 @@
         "url": "https://github.com/wizhut/uv-vscode"
     },
     "homepage": "https://wizhut.tech/practical-uv",
-    "version": "0.1.8",
+    "version": "0.1.9",
     "license": "MIT",
     "icon": "icon.png",
     "author": {
@@ -16,7 +16,7 @@
         "email": "vassilios.karakoidas@wizhut.tech"
     },
     "engines": {
-        "vscode": "^1.118.0"
+        "vscode": "^1.125.0"
     },
     "categories": [
         "Other"
@@ -100,9 +100,9 @@
         "test": "node --test out/test/*.test.js"
     },
     "devDependencies": {
-        "@types/node": "^25.6.2",
-        "@types/vscode": "^1.118.0",
-        "@vscode/vsce": "^3.9.1",
+        "@types/node": "^26.1.1",
+        "@types/vscode": "^1.125.0",
+        "@vscode/vsce": "^3.9.2",
         "typescript": "^6.0.3"
     },
     "dependencies": {
