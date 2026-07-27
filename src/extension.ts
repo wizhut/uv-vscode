@@ -117,10 +117,7 @@ async function fetchPypiData(packageName: string): Promise<any> {
 
 export function activate(context: vscode.ExtensionContext) {
     const outputChannel = vscode.window.createOutputChannel('UV PyPI');
-    outputChannel.appendLine('uv-vscode extension is now active!');
-    outputChannel.show(true);
     vscode.window.setStatusBarMessage('Practical UV extension active', 5000);
-    console.log('uv-vscode extension is now active!');
     const pyprojectSelector: vscode.DocumentSelector = [
         { language: 'toml', pattern: '**/pyproject.toml' },
         { pattern: '**/pyproject.toml' }
