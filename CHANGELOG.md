@@ -7,6 +7,13 @@ git history for details.
 
 ## [0.1.9]
 
+### Fixed
+
+- The "UV PyPI" output panel no longer forces itself open on activation.
+  Because the extension activates on `onStartupFinished`, the panel was
+  revealed on every VS Code launch. The channel still receives diagnostics,
+  hover and code-action logging; it is now reached via the Output dropdown.
+
 ### Changed
 
 - **Minimum supported VS Code is now 1.125.** `engines.vscode` was raised from
