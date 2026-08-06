@@ -92,6 +92,28 @@ In `requirements.txt` (and the variants listed above), each line is parsed as a 
 - VS Code `^1.85.0`
 - Internet access for PyPI lookups
 
+## About Wizhut.tech
+
+Practical UV is built by [Wizhut.tech](https://wizhut.tech). We make sharp, focused software that removes busywork from the working day — lean open-source libraries at one end, full-platform observability and AI tooling at the other. The common thread is that our tools are meant to stay out of your way.
+
+### Open source
+
+| Project | What it does |
+|---|---|
+| **[Practical UV](https://wizhut.tech/practical-uv)** | This extension — `uv` and pip dependency management inside VS Code. |
+| **[Kyori](https://wizhut.tech/kyori)** | String distance and similarity for JavaScript: Levenshtein, Hamming, Damerau-Levenshtein, Jaro-Winkler, plus a token-sensitive ranking score for autocomplete. [`@wizhut_tech/kyori`](https://www.npmjs.com/package/@wizhut_tech/kyori) |
+| **[WizJS](https://wizhut.tech/wizjs)** | Curated everyday JavaScript utilities organised by namespace, without becoming another lodash. Zero runtime dependencies. [`@wizhut_tech/wizjs`](https://www.npmjs.com/package/@wizhut_tech/wizjs) |
+| **[json2jsonl](https://wizhut.tech/json2jsonl)** | A pipe-friendly CLI that converts one or many JSON files into a single JSONL stream. One static binary. |
+
+### Apps and platforms
+
+| Product | What it does |
+|---|---|
+| **[EasyHomebrew](https://easyhomebrew.wizhut.tech)** | Supply-chain hygiene for your Mac: a native Homebrew manager that scans everything you've installed against a live CVE database and keeps watching for new advisories. macOS 14+, €10 one-time. |
+| **[Contain](https://wizhut.tech/contain)** | Gathers macOS windows you already have open into one window with tabs — one tab per window, put back exactly where it was when you release it. macOS 13+, free public beta (the current build is time-limited). |
+| **[Promptivo](https://promptivo.wizhut.tech)** | Scores AI prompts across seven quality dimensions, deterministically — no model calls, no latency, no per-evaluation cost. Grounded in peer-reviewed research. |
+| **[Cloudproc](https://cloudproc.io)** | Application-level observability: metrics, traces, and logs in one dashboard, with alerting that cuts noise rather than adding to it. |
+
 ## Development
 
 ```bash
