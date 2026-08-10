@@ -1,4 +1,4 @@
-# UV VS Code Integration
+# Practical UV
 
 A VS Code extension for working with Python dependency files. Supports both [uv](https://github.com/astral-sh/uv) / PEP 621 `pyproject.toml` and pip's `requirements.txt`. Provides TOML syntax highlighting, dependency version management via PyPI, and project version bumping.
 
@@ -89,7 +89,7 @@ In `requirements.txt` (and the variants listed above), each line is parsed as a 
 
 ## Requirements
 
-- VS Code `^1.85.0`
+- VS Code `^1.125.0`
 - Internet access for PyPI lookups
 
 ## About Wizhut.tech

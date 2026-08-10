@@ -5,6 +5,27 @@ All notable changes to **Practical UV** are documented in this file.
 Releases before 0.1.9 predate this file and are not documented here; see the
 git history for details.
 
+## [0.1.10]
+
+### Fixed
+
+- The README's stated requirement was still `VS Code ^1.85.0`, forty releases
+  behind the actual `engines.vscode` of `^1.125.0`. Corrected.
+
+### Changed
+
+- The README's top-level heading is now **Practical UV**, matching the
+  extension's `displayName` and both marketplace listings. It was the last
+  place still carrying the old "UV VS Code Integration" name.
+
+### Notes
+
+- No code changes — this release exists to ship documentation that never
+  reached the registries. The 0.1.9 artifact published to the VS Code
+  Marketplace and Open VSX was packaged moments before `CHANGELOG.md` was
+  first written, so neither listing has ever shown a changelog. Registries do
+  not allow republishing an existing version, so the fix required a new one.
+
 ## [0.1.9]
 
 ### Fixed
