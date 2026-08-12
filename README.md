@@ -18,6 +18,12 @@ Checks your declared dependencies against the [OSV](https://osv.dev) advisory da
 
 Findings appear in four places: as squiggles and Problems-panel entries (with a clickable link to the advisory on osv.dev), in the hover for the package, as a **Upgrade … (fixes CVE-…)** quick fix, and in a Security column in the dependency dashboard. When a package carries several advisories wanting different floors, the quick fix picks the highest version, so one bump clears them all.
 
+#### Checking a single dependency
+
+Press `Cmd+.` / `Ctrl+.` on any dependency and the code-action menu offers **Check `<package>` for security advisories** next to the usual version options — **Re-check** once results already exist. It checks that one package rather than the whole file, so it is available even while `uv.security.enabled` is off, and it leaves findings for the rest of the file untouched.
+
+The result distinguishes *clean* from *unverifiable*. A dependency with no `uv.lock` entry and no `==` pin has no exact version to check against, so instead of reporting "no advisories" it tells you how many its declared range permits and points you at `uv.security.includeRangeFindings`.
+
 #### How versions are resolved
 
 An advisory applies to a *concrete* version, but a dependency is usually declared as a range. Two cases:
@@ -54,7 +60,7 @@ You'll be prompted to confirm before anything is executed.
 
 ### ⚡ Quick Fix: Upgrade to Latest
 
-Click the lightbulb (or press `Cmd+.` / `Ctrl+.`) on an outdated dependency to instantly upgrade it to the latest version.
+Click the lightbulb (or press `Cmd+.` / `Ctrl+.`) on an outdated dependency to instantly upgrade it to the latest version. The same menu offers a per-dependency security check — see [Security Advisories](#️-security-advisories-opt-in).
 
 ### 📋 Version Selection
 

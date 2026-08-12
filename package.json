@@ -80,6 +80,10 @@
                 "title": "UV: Check Dependencies for Security Advisories"
             },
             {
+                "command": "uv.checkPackageSecurity",
+                "title": "UV: Check Package for Security Advisories"
+            },
+            {
                 "command": "uv.convertToUv",
                 "title": "UV: Convert requirements.txt to uv project"
             }
@@ -89,6 +93,10 @@
                 {
                     "command": "uv.convertToUv",
                     "when": "uv.requirementsActive"
+                },
+                {
+                    "command": "uv.checkPackageSecurity",
+                    "when": "false"
                 }
             ]
         },

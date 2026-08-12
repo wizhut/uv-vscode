@@ -20,6 +20,7 @@ import {
     Severity,
     auditDependencies,
     parseUvLock,
+    resolveVersion,
 } from './audit';
 
 const pypiCache = new Map<string, any>();
@@ -261,23 +262,9 @@ export function activate(context: vscode.ExtensionContext) {
         }
     }
 
-    async function updateSecurityDiagnostics(document: vscode.TextDocument, force = false): Promise<Finding[] | null> {
-        if (!isSupportedDocument(document)) {
-            return null;
-        }
-        const { enabled, includeRangeFindings } = securityConfig();
-        if (!enabled && !force) {
-            return null;
-        }
-
-        const findings = await runAudit(document);
-        if (findings === null) {
-            return null;
-        }
-
-        const visible = findings.filter(f => includeRangeFindings || f.confidence === 'exact');
-        securityFindings.set(document.uri.toString(), visible);
-
+    // Rebuilds the whole collection from `findings`, which is the full set for
+    // the document — a single-package re-check merges into that set first.
+    function renderSecurityDiagnostics(document: vscode.TextDocument, findings: Finding[]) {
         const parsed = getParsedDocument(document);
         const locations = new Map<string, DepLocation[]>();
         for (const dep of parsed.deps) {
@@ -288,7 +275,7 @@ export function activate(context: vscode.ExtensionContext) {
         }
 
         const diagnostics: vscode.Diagnostic[] = [];
-        for (const finding of visible) {
+        for (const finding of findings) {
             for (const dep of locations.get(normalizePackageName(finding.packageName)) ?? []) {
                 const range = new vscode.Range(
                     new vscode.Position(dep.line, dep.contentStart),
@@ -313,6 +300,25 @@ export function activate(context: vscode.ExtensionContext) {
         }
 
         securityCollection.set(document.uri, diagnostics);
+    }
+
+    async function updateSecurityDiagnostics(document: vscode.TextDocument, force = false): Promise<Finding[] | null> {
+        if (!isSupportedDocument(document)) {
+            return null;
+        }
+        const { enabled, includeRangeFindings } = securityConfig();
+        if (!enabled && !force) {
+            return null;
+        }
+
+        const findings = await runAudit(document);
+        if (findings === null) {
+            return null;
+        }
+
+        const visible = findings.filter(f => includeRangeFindings || f.confidence === 'exact');
+        securityFindings.set(document.uri.toString(), visible);
+        renderSecurityDiagnostics(document, visible);
         outputChannel.appendLine(`[security] ${document.fileName}: ${visible.length} finding(s)`);
         return visible;
     }
@@ -622,11 +628,6 @@ export function activate(context: vscode.ExtensionContext) {
                     return [];
                 }
 
-                const findings = securityFindings.get(document.uri.toString()) ?? [];
-                if (findings.length === 0) {
-                    return [];
-                }
-
                 const parsed = getParsedDocument(document);
                 const lineIndex = range.start.line;
                 const lineDeps = depsOnLine(parsed, lineIndex);
@@ -634,45 +635,60 @@ export function activate(context: vscode.ExtensionContext) {
                     return [];
                 }
                 const dep = findDepAtPosition(parsed, lineIndex, range.start.character) || lineDeps[0];
+
+                const findings = securityFindings.get(document.uri.toString()) ?? [];
                 const relevant = findings.filter(f => normalizePackageName(f.packageName) === normalizePackageName(dep.packageName));
-                if (relevant.length === 0) {
-                    return [];
+                const actions: vscode.CodeAction[] = [];
+
+                if (relevant.length > 0) {
+                    // One bump has to clear every advisory on this package, so
+                    // take the highest recommended fix rather than the first.
+                    const fixes = relevant.map(f => f.recommendedFix).filter((v): v is string => !!v);
+                    if (fixes.length > 0) {
+                        const target = fixes.reduce((a, b) => (b.localeCompare(a, undefined, { numeric: true }) > 0 ? b : a));
+                        const spec = dep.versionSpec === '==' || dep.versionSpec === '===' ? dep.versionSpec : '>=';
+                        const labels = relevant.map(findingLabel).join(', ');
+
+                        const upgrade = new vscode.CodeAction(
+                            `Upgrade ${dep.packageName} to ${target} (fixes ${labels})`,
+                            vscode.CodeActionKind.QuickFix
+                        );
+                        const edit = new vscode.WorkspaceEdit();
+                        edit.replace(
+                            document.uri,
+                            new vscode.Range(
+                                new vscode.Position(lineIndex, dep.contentStart),
+                                new vscode.Position(lineIndex, dep.contentEnd)
+                            ),
+                            `${dep.packageWithExtras}${spec}${target}`
+                        );
+                        upgrade.edit = edit;
+                        upgrade.isPreferred = true;
+
+                        const securityDiagnostics = context.diagnostics.filter(d => d.source === 'uv-security' && d.range.start.line === lineIndex);
+                        if (securityDiagnostics.length > 0) {
+                            upgrade.diagnostics = securityDiagnostics;
+                        }
+                        actions.push(upgrade);
+                    }
                 }
 
-                // One bump has to clear every advisory on this package, so take
-                // the highest recommended fix rather than the first.
-                const fixes = relevant.map(f => f.recommendedFix).filter((v): v is string => !!v);
-                if (fixes.length === 0) {
-                    return [];
-                }
-                const target = fixes.reduce((a, b) => (b.localeCompare(a, undefined, { numeric: true }) > 0 ? b : a));
-
-                const spec = dep.versionSpec === '==' || dep.versionSpec === '===' ? dep.versionSpec : '>=';
-                const newItem = `${dep.packageWithExtras}${spec}${target}`;
-                const labels = relevant.map(findingLabel).join(', ');
-
-                const action = new vscode.CodeAction(
-                    `Upgrade ${dep.packageName} to ${target} (fixes ${labels})`,
+                // Offered unconditionally, so the check is reachable from the
+                // lightbulb even when uv.security.enabled is off.
+                const check = new vscode.CodeAction(
+                    relevant.length > 0
+                        ? `Re-check ${dep.packageName} for security advisories`
+                        : `Check ${dep.packageName} for security advisories`,
                     vscode.CodeActionKind.QuickFix
                 );
-                const edit = new vscode.WorkspaceEdit();
-                edit.replace(
-                    document.uri,
-                    new vscode.Range(
-                        new vscode.Position(lineIndex, dep.contentStart),
-                        new vscode.Position(lineIndex, dep.contentEnd)
-                    ),
-                    newItem
-                );
-                action.edit = edit;
-                action.isPreferred = true;
+                check.command = {
+                    command: 'uv.checkPackageSecurity',
+                    title: 'Check for security advisories',
+                    arguments: [document.uri, dep.packageName]
+                };
+                actions.push(check);
 
-                const securityDiagnostics = context.diagnostics.filter(d => d.source === 'uv-security' && d.range.start.line === lineIndex);
-                if (securityDiagnostics.length > 0) {
-                    action.diagnostics = securityDiagnostics;
-                }
-
-                return [action];
+                return actions;
             }
         },
         { providedCodeActionKinds: [vscode.CodeActionKind.QuickFix] }
@@ -971,6 +987,69 @@ export function activate(context: vscode.ExtensionContext) {
         }
     });
 
+    // Invoked from the dependency code-action menu. Checks one package rather
+    // than the whole file, so it stays cheap enough to offer unconditionally.
+    const checkPackageSecurityCmd = vscode.commands.registerCommand('uv.checkPackageSecurity', async (uri: vscode.Uri, packageName: string) => {
+        const document = await vscode.workspace.openTextDocument(uri);
+        const parsed = getParsedDocument(document);
+        const normalized = normalizePackageName(packageName);
+        const deps = parsed.deps.filter(d => normalizePackageName(d.packageName) === normalized);
+        if (deps.length === 0) {
+            return;
+        }
+
+        const lock = await loadLock(document);
+        const { includeRangeFindings } = securityConfig();
+
+        let found: Finding[];
+        try {
+            found = await vscode.window.withProgress(
+                { location: vscode.ProgressLocation.Window, title: `Checking ${packageName} for advisories...` },
+                () => auditDependencies(deps, lock, osvClient)
+            );
+        } catch (e: any) {
+            outputChannel.appendLine(`[security] ${packageName}: ${e.message}`);
+            vscode.window.showErrorMessage(`Could not reach the OSV advisory database. See the UV PyPI output channel.`);
+            return;
+        }
+
+        const visible = found.filter(f => includeRangeFindings || f.confidence === 'exact');
+
+        // Replace only this package's findings; leave the rest of the document's
+        // results in place so a single check never wipes the others.
+        const key = document.uri.toString();
+        const others = (securityFindings.get(key) ?? []).filter(f => normalizePackageName(f.packageName) !== normalized);
+        const merged = [...others, ...visible];
+        securityFindings.set(key, merged);
+        renderSecurityDiagnostics(document, merged);
+        outputChannel.appendLine(`[security] ${packageName}: ${visible.length} finding(s)`);
+
+        if (visible.length > 0) {
+            const worst = SEVERITY_ORDER.find(s => visible.some(f => f.severity === s)) ?? 'UNKNOWN';
+            const choice = await vscode.window.showWarningMessage(
+                `${packageName}: ${visible.length} advisor${visible.length === 1 ? 'y' : 'ies'} (worst: ${worst.toLowerCase()}).`,
+                'Show Problems'
+            );
+            if (choice === 'Show Problems') {
+                vscode.commands.executeCommand('workbench.actions.view.problems');
+            }
+            return;
+        }
+
+        // "Nothing found" means different things depending on whether the
+        // version could be resolved — say which, rather than implying safety.
+        const resolved = resolveVersion(deps[0], lock);
+        if (resolved) {
+            vscode.window.showInformationMessage(`No known advisories affect ${packageName} ${resolved}.`);
+        } else if (found.length > 0) {
+            vscode.window.showInformationMessage(
+                `${packageName} has no exact version to check (no uv.lock entry or == pin). ${found.length} advisor${found.length === 1 ? 'y is' : 'ies are'} permitted by its declared range — enable uv.security.includeRangeFindings to see them.`
+            );
+        } else {
+            vscode.window.showInformationMessage(`No known advisories for ${packageName}.`);
+        }
+    });
+
     const convertToUvCmd = vscode.commands.registerCommand('uv.convertToUv', async () => {
         const editor = vscode.window.activeTextEditor;
         if (!editor || !isRequirementsTxtDocument(editor.document)) {
@@ -1017,7 +1096,7 @@ export function activate(context: vscode.ExtensionContext) {
         terminal.sendText(`uv add -r ${reqArg}`);
     });
 
-    context.subscriptions.push(uvSyncCmd, uvAddCmd, uvRunCmd, pypiHoverProvider, pypiCodeActionProvider, securityCodeActionProvider, versionBumpProvider, upgradeVersionCmd, selectVersionCmd, selectPythonVersionCmd, showDependenciesCmd, checkSecurityCmd, convertToUvCmd);
+    context.subscriptions.push(uvSyncCmd, uvAddCmd, uvRunCmd, pypiHoverProvider, pypiCodeActionProvider, securityCodeActionProvider, versionBumpProvider, upgradeVersionCmd, selectVersionCmd, selectPythonVersionCmd, showDependenciesCmd, checkSecurityCmd, checkPackageSecurityCmd, convertToUvCmd);
 }
 
 const SEVERITY_ORDER: Severity[] = ['CRITICAL', 'HIGH', 'MODERATE', 'LOW', 'UNKNOWN'];

@@ -22,6 +22,20 @@ git history for details.
   **UV: Check Dependencies for Security Advisories** runs a one-off check
   without changing the setting.
 
+- **A per-dependency security check in the code-action menu.** `Cmd+.` on any
+  dependency now offers **Check &lt;package&gt; for security advisories**
+  alongside the existing version options, and **Re-check …** once results
+  exist. It is offered unconditionally — including while `uv.security.enabled`
+  is off — because it checks a single package rather than the whole file. A
+  single-package check replaces only that package's findings, so it never wipes
+  results already gathered for the rest of the document.
+
+  The outcome is reported precisely rather than reassuringly. "No advisories"
+  is distinguished from "no exact version to check": a dependency with neither
+  a `uv.lock` entry nor an `==` pin reports how many advisories its declared
+  range permits and points at `uv.security.includeRangeFindings`, instead of
+  implying a safety the check did not establish.
+
 - **`uv.lock` is read to resolve declared dependencies to exact versions.** An
   advisory applies to a concrete version, but dependencies are usually declared
   as ranges. When a lockfile sits next to the `pyproject.toml`, each declared
