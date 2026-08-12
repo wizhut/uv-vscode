@@ -8,7 +8,7 @@
         "url": "https://github.com/wizhut/uv-vscode"
     },
     "homepage": "https://wizhut.tech/practical-uv",
-    "version": "0.1.10",
+    "version": "0.2.0",
     "license": "MIT",
     "icon": "icon.png",
     "author": {
@@ -76,6 +76,10 @@
                 "title": "UV: Show Dependencies"
             },
             {
+                "command": "uv.checkSecurity",
+                "title": "UV: Check Dependencies for Security Advisories"
+            },
+            {
                 "command": "uv.convertToUv",
                 "title": "UV: Convert requirements.txt to uv project"
             }
@@ -87,6 +91,21 @@
                     "when": "uv.requirementsActive"
                 }
             ]
+        },
+        "configuration": {
+            "title": "Practical UV",
+            "properties": {
+                "uv.security.enabled": {
+                    "type": "boolean",
+                    "default": false,
+                    "markdownDescription": "Check declared dependencies against the [OSV](https://osv.dev) advisory database and report known vulnerabilities as diagnostics.\n\n**Privacy:** when enabled, the names and versions of your declared dependencies are sent to `api.osv.dev`. Only top-level dependencies are checked; the transitive tree in `uv.lock` is used solely to resolve exact versions and is never sent."
+                },
+                "uv.security.includeRangeFindings": {
+                    "type": "boolean",
+                    "default": false,
+                    "markdownDescription": "Also report advisories that a dependency's declared range *permits* but that its resolved version may not have. Requires `#uv.security.enabled#`.\n\nThese appear for dependencies with no `uv.lock` entry and no exact pin. They are accurate but noisy — an open constraint like `requests>=2.0` permits every advisory ever published for that package."
+                }
+            }
         }
     },
     "scripts": {

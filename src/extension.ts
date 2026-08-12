@@ -11,7 +11,16 @@ import {
     hasVersionUpdates,
     parseDocument,
     parseRequirements,
+    normalizePackageName,
 } from './parser';
+import {
+    Finding,
+    OsvClient,
+    OsvVulnerability,
+    Severity,
+    auditDependencies,
+    parseUvLock,
+} from './audit';
 
 const pypiCache = new Map<string, any>();
 
@@ -170,11 +179,153 @@ export function activate(context: vscode.ExtensionContext) {
     });
 
     const diagnosticCollection = vscode.languages.createDiagnosticCollection('uv-pypi');
-    context.subscriptions.push(diagnosticCollection);
+    // Kept separate from uv-pypi so advisories and outdated-version warnings can
+    // be filtered independently in the Problems panel.
+    const securityCollection = vscode.languages.createDiagnosticCollection('uv-security');
+    context.subscriptions.push(diagnosticCollection, securityCollection);
 
     let timeout: NodeJS.Timeout | undefined = undefined;
+    let securityTimeout: NodeJS.Timeout | undefined = undefined;
     const lastSavedSnapshot = new Map<string, SnapshotState>();
     const parsedDocCache = new Map<string, { version: number; parsed: ParsedDocument }>();
+
+    // Advisory bodies are immutable, so this survives for the session and is
+    // shared across every document the user opens.
+    const vulnCache = new Map<string, OsvVulnerability>();
+    const osvClient = new OsvClient(undefined, vulnCache);
+    const securityFindings = new Map<string, Finding[]>();
+    const lockCache = new Map<string, { mtime: number; lock: Map<string, string> }>();
+
+    function securityConfig() {
+        const config = vscode.workspace.getConfiguration('uv');
+        return {
+            enabled: config.get<boolean>('security.enabled', false),
+            // Constraint-only findings are honest but noisy — `requests>=2.0`
+            // permits every advisory since 2014 — so they are off by default.
+            includeRangeFindings: config.get<boolean>('security.includeRangeFindings', false),
+        };
+    }
+
+    // uv.lock sits next to the pyproject.toml and pins each declared dep to an
+    // exact version. Its transitive entries are never queried on their own.
+    async function loadLock(document: vscode.TextDocument): Promise<Map<string, string> | undefined> {
+        if (!isPyprojectTomlDocument(document)) {
+            return undefined;
+        }
+        const lockUri = vscode.Uri.file(path.join(path.dirname(document.fileName), 'uv.lock'));
+        const key = lockUri.toString();
+        try {
+            const stat = await vscode.workspace.fs.stat(lockUri);
+            const cached = lockCache.get(key);
+            if (cached && cached.mtime === stat.mtime) {
+                return cached.lock;
+            }
+            const bytes = await vscode.workspace.fs.readFile(lockUri);
+            const lock = parseUvLock(Buffer.from(bytes).toString('utf8'));
+            lockCache.set(key, { mtime: stat.mtime, lock });
+            outputChannel.appendLine(`[security] loaded uv.lock (${lock.size} packages)`);
+            return lock;
+        } catch {
+            lockCache.delete(key);
+            return undefined;
+        }
+    }
+
+    function severityToDiagnostic(severity: Severity): vscode.DiagnosticSeverity {
+        switch (severity) {
+            case 'CRITICAL':
+            case 'HIGH':
+                return vscode.DiagnosticSeverity.Error;
+            case 'MODERATE':
+                return vscode.DiagnosticSeverity.Warning;
+            default:
+                return vscode.DiagnosticSeverity.Information;
+        }
+    }
+
+    function findingLabel(finding: Finding): string {
+        return finding.aliases.find(a => a.startsWith('CVE-')) ?? finding.id;
+    }
+
+    async function runAudit(document: vscode.TextDocument): Promise<Finding[] | null> {
+        const parsed = getParsedDocument(document);
+        if (parsed.deps.length === 0) {
+            return [];
+        }
+        const lock = await loadLock(document);
+        try {
+            return await auditDependencies(parsed.deps, lock, osvClient);
+        } catch (e: any) {
+            outputChannel.appendLine(`[security] audit failed: ${e.message}`);
+            return null;
+        }
+    }
+
+    async function updateSecurityDiagnostics(document: vscode.TextDocument, force = false): Promise<Finding[] | null> {
+        if (!isSupportedDocument(document)) {
+            return null;
+        }
+        const { enabled, includeRangeFindings } = securityConfig();
+        if (!enabled && !force) {
+            return null;
+        }
+
+        const findings = await runAudit(document);
+        if (findings === null) {
+            return null;
+        }
+
+        const visible = findings.filter(f => includeRangeFindings || f.confidence === 'exact');
+        securityFindings.set(document.uri.toString(), visible);
+
+        const parsed = getParsedDocument(document);
+        const locations = new Map<string, DepLocation[]>();
+        for (const dep of parsed.deps) {
+            const key = normalizePackageName(dep.packageName);
+            const list = locations.get(key) ?? [];
+            list.push(dep);
+            locations.set(key, list);
+        }
+
+        const diagnostics: vscode.Diagnostic[] = [];
+        for (const finding of visible) {
+            for (const dep of locations.get(normalizePackageName(finding.packageName)) ?? []) {
+                const range = new vscode.Range(
+                    new vscode.Position(dep.line, dep.contentStart),
+                    new vscode.Position(dep.line, dep.contentEnd)
+                );
+                const where = finding.resolvedVersion
+                    ? `${finding.packageName} ${finding.resolvedVersion}`
+                    : `${finding.packageName} (declared range permits an affected version)`;
+                const fix = finding.recommendedFix ? ` Fixed in ${finding.recommendedFix}.` : ' No fixed version published.';
+                const diagnostic = new vscode.Diagnostic(
+                    range,
+                    `${where}: ${findingLabel(finding)} (${finding.severity}) — ${finding.summary}${fix}`,
+                    severityToDiagnostic(finding.severity)
+                );
+                diagnostic.source = 'uv-security';
+                diagnostic.code = {
+                    value: finding.id,
+                    target: vscode.Uri.parse(`https://osv.dev/vulnerability/${finding.id}`),
+                };
+                diagnostics.push(diagnostic);
+            }
+        }
+
+        securityCollection.set(document.uri, diagnostics);
+        outputChannel.appendLine(`[security] ${document.fileName}: ${visible.length} finding(s)`);
+        return visible;
+    }
+
+    function triggerSecurityCheck(document: vscode.TextDocument) {
+        if (!isSupportedDocument(document) || !securityConfig().enabled) {
+            return;
+        }
+        if (securityTimeout) {
+            clearTimeout(securityTimeout);
+        }
+        securityTimeout = setTimeout(() => updateSecurityDiagnostics(document), 1500);
+    }
 
     function getParsedDocument(document: vscode.TextDocument): ParsedDocument {
         const key = document.uri.toString();
@@ -273,13 +424,17 @@ export function activate(context: vscode.ExtensionContext) {
             lastSavedSnapshot.set(activeDoc.uri.toString(), buildSnapshot(getParsedDocument(activeDoc)));
         }
         triggerUpdateDiagnostics(activeDoc);
+        triggerSecurityCheck(activeDoc);
         refreshActiveDocContext(activeDoc);
     }
 
     context.subscriptions.push(
         vscode.window.onDidChangeActiveTextEditor(editor => {
             refreshActiveDocContext(editor?.document);
-            if (editor) triggerUpdateDiagnostics(editor.document);
+            if (editor) {
+                triggerUpdateDiagnostics(editor.document);
+                triggerSecurityCheck(editor.document);
+            }
         }),
         vscode.workspace.onDidChangeTextDocument(event => {
             triggerUpdateDiagnostics(event.document);
@@ -322,12 +477,28 @@ export function activate(context: vscode.ExtensionContext) {
             }
 
             lastSavedSnapshot.set(key, current);
+            // uv sync may have rewritten uv.lock, so re-resolve versions.
+            triggerSecurityCheck(document);
         }),
         vscode.workspace.onDidCloseTextDocument(document => {
             diagnosticCollection.delete(document.uri);
+            securityCollection.delete(document.uri);
             const key = document.uri.toString();
             parsedDocCache.delete(key);
             lastSavedSnapshot.delete(key);
+            securityFindings.delete(key);
+        }),
+        vscode.workspace.onDidChangeConfiguration(event => {
+            if (!event.affectsConfiguration('uv.security')) {
+                return;
+            }
+            const editor = vscode.window.activeTextEditor;
+            if (!securityConfig().enabled) {
+                securityCollection.clear();
+                securityFindings.clear();
+            } else if (editor) {
+                triggerSecurityCheck(editor.document);
+            }
         })
     );
 
@@ -353,6 +524,18 @@ export function activate(context: vscode.ExtensionContext) {
                 const markdown = new vscode.MarkdownString();
                 markdown.isTrusted = true;
                 markdown.appendMarkdown(`**PyPI: ${dep.packageName}**\n\nLatest version: \`${latestVersion}\`\n\n[View on PyPI](https://pypi.org/project/${dep.packageName}/)`);
+
+                const advisories = (securityFindings.get(document.uri.toString()) ?? [])
+                    .filter(f => normalizePackageName(f.packageName) === normalizePackageName(dep.packageName));
+                if (advisories.length > 0) {
+                    markdown.appendMarkdown(`\n\n---\n\n**$(shield) ${advisories.length} known ${advisories.length === 1 ? 'advisory' : 'advisories'}**\n\n`);
+                    markdown.supportThemeIcons = true;
+                    for (const finding of advisories) {
+                        const fix = finding.recommendedFix ? ` — fixed in \`${finding.recommendedFix}\`` : ' — no fix published';
+                        markdown.appendMarkdown(`- [${findingLabel(finding)}](https://osv.dev/vulnerability/${finding.id}) (${finding.severity})${fix}\n\n  ${finding.summary}\n`);
+                    }
+                }
+
                 return new vscode.Hover(markdown, wordRange);
             } catch (err: any) {
                 outputChannel.appendLine(`[hover] Error: ${err.message}`);
@@ -424,6 +607,72 @@ export function activate(context: vscode.ExtensionContext) {
                     outputChannel.appendLine(`[codeAction] Error: ${err.message}`);
                     return [];
                 }
+            }
+        },
+        { providedCodeActionKinds: [vscode.CodeActionKind.QuickFix] }
+    );
+
+    // Separate from the outdated-version provider, which bails on deps that have
+    // no pinned version — a security fix is worth offering there too.
+    const securityCodeActionProvider = vscode.languages.registerCodeActionsProvider(
+        supportedSelector,
+        {
+            provideCodeActions(document, range, context) {
+                if (!isSupportedDocument(document)) {
+                    return [];
+                }
+
+                const findings = securityFindings.get(document.uri.toString()) ?? [];
+                if (findings.length === 0) {
+                    return [];
+                }
+
+                const parsed = getParsedDocument(document);
+                const lineIndex = range.start.line;
+                const lineDeps = depsOnLine(parsed, lineIndex);
+                if (lineDeps.length === 0) {
+                    return [];
+                }
+                const dep = findDepAtPosition(parsed, lineIndex, range.start.character) || lineDeps[0];
+                const relevant = findings.filter(f => normalizePackageName(f.packageName) === normalizePackageName(dep.packageName));
+                if (relevant.length === 0) {
+                    return [];
+                }
+
+                // One bump has to clear every advisory on this package, so take
+                // the highest recommended fix rather than the first.
+                const fixes = relevant.map(f => f.recommendedFix).filter((v): v is string => !!v);
+                if (fixes.length === 0) {
+                    return [];
+                }
+                const target = fixes.reduce((a, b) => (b.localeCompare(a, undefined, { numeric: true }) > 0 ? b : a));
+
+                const spec = dep.versionSpec === '==' || dep.versionSpec === '===' ? dep.versionSpec : '>=';
+                const newItem = `${dep.packageWithExtras}${spec}${target}`;
+                const labels = relevant.map(findingLabel).join(', ');
+
+                const action = new vscode.CodeAction(
+                    `Upgrade ${dep.packageName} to ${target} (fixes ${labels})`,
+                    vscode.CodeActionKind.QuickFix
+                );
+                const edit = new vscode.WorkspaceEdit();
+                edit.replace(
+                    document.uri,
+                    new vscode.Range(
+                        new vscode.Position(lineIndex, dep.contentStart),
+                        new vscode.Position(lineIndex, dep.contentEnd)
+                    ),
+                    newItem
+                );
+                action.edit = edit;
+                action.isPreferred = true;
+
+                const securityDiagnostics = context.diagnostics.filter(d => d.source === 'uv-security' && d.range.start.line === lineIndex);
+                if (securityDiagnostics.length > 0) {
+                    action.diagnostics = securityDiagnostics;
+                }
+
+                return [action];
             }
         },
         { providedCodeActionKinds: [vscode.CodeActionKind.QuickFix] }
@@ -589,7 +838,7 @@ export function activate(context: vscode.ExtensionContext) {
             { enableScripts: true }
         );
 
-        panel.webview.html = getDependencyHtml([], true);
+        panel.webview.html = getDependencyHtml([], true, [], false);
 
         interface DepRow {
             name: string;
@@ -602,6 +851,11 @@ export function activate(context: vscode.ExtensionContext) {
             error: boolean;
         }
         const rows: DepRow[] = [];
+
+        const securityEnabled = securityConfig().enabled;
+        const auditPromise = securityEnabled
+            ? updateSecurityDiagnostics(document).then(f => f ?? [])
+            : Promise.resolve<Finding[]>([]);
 
         const results = await Promise.allSettled(
             parsed.deps.map(async (dep: DepLocation) => {
@@ -632,7 +886,7 @@ export function activate(context: vscode.ExtensionContext) {
             }
         }
 
-        panel.webview.html = getDependencyHtml(rows, false);
+        panel.webview.html = getDependencyHtml(rows, false, await auditPromise, securityEnabled);
 
         panel.webview.onDidReceiveMessage(async (message: { command: string; name: string; lineIndex: number; lineText: string; versionSpec: string; currentVersion: string; latestVersion: string }) => {
             if (message.command === 'upgrade') {
@@ -673,6 +927,48 @@ export function activate(context: vscode.ExtensionContext) {
                 panel.webview.postMessage({ command: 'allUpgraded' });
             }
         }, undefined, context.subscriptions);
+    });
+
+    // Runs regardless of uv.security.enabled so the feature can be tried once
+    // without turning on background checks.
+    const checkSecurityCmd = vscode.commands.registerCommand('uv.checkSecurity', async () => {
+        const editor = vscode.window.activeTextEditor;
+        if (!editor || !isSupportedDocument(editor.document)) {
+            vscode.window.showWarningMessage('Open a pyproject.toml or requirements.txt file first.');
+            return;
+        }
+
+        const document = editor.document;
+        const findings = await vscode.window.withProgress(
+            { location: vscode.ProgressLocation.Notification, title: 'Checking dependencies against the OSV advisory database...' },
+            () => updateSecurityDiagnostics(document, true)
+        );
+
+        if (findings === null) {
+            vscode.window.showErrorMessage('Could not reach the OSV advisory database. See the UV PyPI output channel.');
+            return;
+        }
+        if (findings.length === 0) {
+            vscode.window.showInformationMessage('No known advisories affect the declared dependencies.');
+            return;
+        }
+
+        const counts = new Map<Severity, number>();
+        for (const finding of findings) {
+            counts.set(finding.severity, (counts.get(finding.severity) ?? 0) + 1);
+        }
+        const summary = (['CRITICAL', 'HIGH', 'MODERATE', 'LOW', 'UNKNOWN'] as Severity[])
+            .filter(s => counts.has(s))
+            .map(s => `${counts.get(s)} ${s.toLowerCase()}`)
+            .join(', ');
+
+        const choice = await vscode.window.showWarningMessage(
+            `${findings.length} advisor${findings.length === 1 ? 'y' : 'ies'} found (${summary}).`,
+            'Show Problems'
+        );
+        if (choice === 'Show Problems') {
+            vscode.commands.executeCommand('workbench.actions.view.problems');
+        }
     });
 
     const convertToUvCmd = vscode.commands.registerCommand('uv.convertToUv', async () => {
@@ -721,11 +1017,45 @@ export function activate(context: vscode.ExtensionContext) {
         terminal.sendText(`uv add -r ${reqArg}`);
     });
 
-    context.subscriptions.push(uvSyncCmd, uvAddCmd, uvRunCmd, pypiHoverProvider, pypiCodeActionProvider, versionBumpProvider, upgradeVersionCmd, selectVersionCmd, selectPythonVersionCmd, showDependenciesCmd, convertToUvCmd);
+    context.subscriptions.push(uvSyncCmd, uvAddCmd, uvRunCmd, pypiHoverProvider, pypiCodeActionProvider, securityCodeActionProvider, versionBumpProvider, upgradeVersionCmd, selectVersionCmd, selectPythonVersionCmd, showDependenciesCmd, checkSecurityCmd, convertToUvCmd);
 }
 
-function getDependencyHtml(rows: Array<{ name: string; currentVersion: string; latestVersion: string; versionSpec: string; lineIndex: number; lineText: string; upToDate: boolean; error: boolean }>, loading: boolean): string {
+const SEVERITY_ORDER: Severity[] = ['CRITICAL', 'HIGH', 'MODERATE', 'LOW', 'UNKNOWN'];
+
+export function getDependencyHtml(
+    rows: Array<{ name: string; currentVersion: string; latestVersion: string; versionSpec: string; lineIndex: number; lineText: string; upToDate: boolean; error: boolean }>,
+    loading: boolean,
+    findings: Finding[],
+    securityEnabled: boolean
+): string {
     const hasOutdated = rows.some(r => !r.upToDate && !r.error);
+
+    const findingsByPackage = new Map<string, Finding[]>();
+    for (const finding of findings) {
+        const key = normalizePackageName(finding.packageName);
+        const list = findingsByPackage.get(key) ?? [];
+        list.push(finding);
+        findingsByPackage.set(key, list);
+    }
+
+    const securityCell = (name: string): string => {
+        if (!securityEnabled) {
+            return '<span class="muted">&ndash;</span>';
+        }
+        const found = findingsByPackage.get(normalizePackageName(name)) ?? [];
+        if (found.length === 0) {
+            return '<span class="ok">&#x2714;</span>';
+        }
+        const worst = SEVERITY_ORDER.find(s => found.some(f => f.severity === s)) ?? 'UNKNOWN';
+        const links = found
+            .map(f => {
+                const label = f.aliases.find(a => a.startsWith('CVE-')) ?? f.id;
+                const fix = f.recommendedFix ? ` &rarr; ${escapeHtml(f.recommendedFix)}` : '';
+                return `<a href="https://osv.dev/vulnerability/${escapeHtml(f.id)}" title="${escapeHtml(f.summary)}">${escapeHtml(label)}</a>${fix}`;
+            })
+            .join('<br>');
+        return `<span class="sev sev-${worst.toLowerCase()}">${worst}</span><div class="advisories">${links}</div>`;
+    };
 
     const tableRows = rows.map(row => {
         const statusCell = row.error
@@ -734,10 +1064,16 @@ function getDependencyHtml(rows: Array<{ name: string; currentVersion: string; l
                 ? '<span class="ok">&#x2714;</span>'
                 : `<button class="upgrade-btn" data-name="${escapeHtml(row.name)}" data-line="${row.lineIndex}" data-linetext="${escapeHtml(row.lineText)}" data-spec="${escapeHtml(row.versionSpec)}" data-current="${escapeHtml(row.currentVersion)}" data-latest="${escapeHtml(row.latestVersion)}">Upgrade</button>`;
 
-        return `<tr id="row-${escapeHtml(row.name)}" class="${row.upToDate ? '' : row.error ? 'row-error' : 'row-outdated'}">
+        const vulnerable = securityEnabled && (findingsByPackage.get(normalizePackageName(row.name))?.length ?? 0) > 0;
+        const rowClass = [row.upToDate ? '' : row.error ? 'row-error' : 'row-outdated', vulnerable ? 'row-vulnerable' : '']
+            .filter(Boolean)
+            .join(' ');
+
+        return `<tr id="row-${escapeHtml(row.name)}" class="${rowClass}">
             <td class="name"><a href="https://pypi.org/project/${escapeHtml(row.name)}/">${escapeHtml(row.name)}</a></td>
             <td class="version">${escapeHtml(row.currentVersion || 'any')}</td>
             <td class="version">${escapeHtml(row.latestVersion)}</td>
+            <td class="security">${securityCell(row.name)}</td>
             <td class="status">${statusCell}</td>
         </tr>`;
     }).join('\n');
@@ -780,15 +1116,35 @@ function getDependencyHtml(rows: Array<{ name: string; currentVersion: string; l
     .upgrade-all-btn { margin-bottom: 16px; padding: 5px 14px; font-size: 0.9em; }
     .loading { text-align: center; padding: 40px; color: var(--vscode-descriptionForeground); }
     .summary { margin-bottom: 12px; font-size: 0.9em; color: var(--vscode-descriptionForeground); }
+    .muted { color: var(--vscode-descriptionForeground); }
+    .sev {
+        font-size: 0.7em;
+        font-weight: 700;
+        letter-spacing: 0.04em;
+        padding: 2px 6px;
+        border-radius: 3px;
+        border: 1px solid currentColor;
+    }
+    .sev-critical, .sev-high { color: var(--vscode-errorForeground); }
+    .sev-moderate { color: var(--vscode-editorWarning-foreground); }
+    .sev-low, .sev-unknown { color: var(--vscode-descriptionForeground); }
+    .advisories { margin-top: 4px; font-size: 0.8em; line-height: 1.5; }
+    .advisories a { color: var(--vscode-textLink-foreground); text-decoration: none; }
+    .advisories a:hover { text-decoration: underline; }
+    .row-vulnerable .name a { font-weight: 600; }
+    .security-note { margin-bottom: 12px; font-size: 0.85em; color: var(--vscode-descriptionForeground); }
 </style>
 </head>
 <body>
     <h1>Dependencies</h1>
     ${loading ? '<div class="loading">Fetching dependency info from PyPI...</div>' : `
     <p class="summary">${rows.length} dependencies &mdash; ${rows.filter(r => r.upToDate).length} up to date, ${rows.filter(r => !r.upToDate && !r.error).length} outdated${rows.some(r => r.error) ? `, ${rows.filter(r => r.error).length} errors` : ''}</p>
+    ${securityEnabled
+        ? `<p class="security-note">${findings.length === 0 ? 'No known advisories affect these dependencies.' : `${findings.length} advisor${findings.length === 1 ? 'y' : 'ies'} from the OSV database.`}</p>`
+        : '<p class="security-note">Security checking is off. Enable <code>uv.security.enabled</code> to check dependencies against the OSV advisory database.</p>'}
     ${hasOutdated ? '<button class="upgrade-all-btn" id="upgradeAllBtn">Upgrade All</button>' : ''}
     <table>
-        <thead><tr><th>Package</th><th>Current</th><th>Latest</th><th>Status</th></tr></thead>
+        <thead><tr><th>Package</th><th>Current</th><th>Latest</th><th>Security</th><th>Status</th></tr></thead>
         <tbody>${tableRows}</tbody>
     </table>
     <script>

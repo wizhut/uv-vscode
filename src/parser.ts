@@ -28,6 +28,11 @@ export interface SnapshotState {
     dependencyVersions: Map<string, string>;
 }
 
+// PEP 503: lowercase, and collapse runs of -_. into a single -
+export function normalizePackageName(name: string): string {
+    return name.trim().toLowerCase().replace(/[-_.]+/g, '-');
+}
+
 export function parsePep508(spec: string): DepSpec | null {
     const m = spec.trim().match(PEP508_REGEX);
     if (!m) {
