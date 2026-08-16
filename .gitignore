@@ -6,3 +6,10 @@ package-lock.json
 *.vsix
 dist/
 .claude/settings.local.json
+# Credentials — never commit
+.env
+.env.*
+!.env.example
+.npmrc
+*.pem
+*.key

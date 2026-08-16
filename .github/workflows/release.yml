@@ -36,7 +36,13 @@ jobs:
           fi
           echo "VERSION=$pkg" >> "$GITHUB_ENV"
 
-      - run: npm ci
+      # package-lock.json is gitignored in this repo, so `npm ci` alone would
+      # fail on a clean checkout. Commit the lockfile and this becomes `npm ci`
+      # on every run, which is what you want for a reproducible release.
+      - name: Install dependencies
+        run: |
+          if [ -f package-lock.json ]; then npm ci; else npm install --no-fund; fi
+
       - run: npm test # pretest compiles
 
       # Both identities out of one repo: wizhut-tech.wiz-practical-uv for the
