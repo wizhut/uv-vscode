@@ -1,0 +1,63 @@
+name: Release
+
+# Tag-driven: pushing v<x.y.z> packages both marketplace identities, publishes
+# them and opens a GitHub release. Cut one with:
+#   npm version patch && git push --follow-tags
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write # gh release create
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0 # --generate-notes diffs against the previous tag
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "24"
+
+      # scripts/package.js names the .vsix from package.json, so a tag that
+      # disagrees would publish a version nobody can find.
+      - name: Check the tag matches package.json
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          pkg="$(node -p "require('./package.json').version")"
+          if [ "$tag" != "$pkg" ]; then
+            echo "::error::tag $GITHUB_REF_NAME does not match package.json version $pkg"
+            exit 1
+          fi
+          echo "VERSION=$pkg" >> "$GITHUB_ENV"
+
+      - run: npm ci
+      - run: npm test # pretest compiles
+
+      # Both identities out of one repo: wizhut-tech.wiz-practical-uv for the
+      # VS Code Marketplace, wizhut.uv-vscode for Open VSX (legacy identity).
+      - run: npm run package
+
+      - name: Publish to the VS Code Marketplace
+        env:
+          VSCE_PAT: ${{ secrets.VSCE_PAT }}
+        run: npx --no-install vsce publish --packagePath "dist/wiz-practical-uv-$VERSION.vsix"
+
+      - name: Publish to Open VSX
+        env:
+          OVSX_PAT: ${{ secrets.OVSX_PAT }}
+        run: npx ovsx publish "dist/uv-vscode-$VERSION.vsix"
+
+      - name: Publish the GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            --title "Practical UV $GITHUB_REF_NAME" \
+            --generate-notes \
+            "dist/wiz-practical-uv-$VERSION.vsix" "dist/uv-vscode-$VERSION.vsix"
