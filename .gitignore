@@ -13,3 +13,4 @@ dist/
 .npmrc
 *.pem
 *.key
+CLAUDE.md
