@@ -49,14 +49,18 @@ Comments (`#`), blank lines, pip directives (`-r`, `-e`, `-c`, `--index-url`, �
 
 ### 🚀 Convert pip Project to uv
 
-When a `requirements.txt` file is the active editor, a **`$(arrow-up) Convert to uv`** action appears in the status bar (and **UV: Convert requirements.txt to uv project** is available in the command palette).
+When a requirements file is the active editor, a **`$(arrow-up) Convert to uv`** action appears in the status bar (and **UV: Convert requirements.txt to uv project** is available in the command palette). Nothing runs until you confirm, and the confirmation lists the exact commands.
 
-It runs the appropriate sequence in the integrated terminal at the workspace folder root:
+They run in the integrated terminal, at the workspace folder root:
 
-- If no `pyproject.toml` exists: `uv init` followed by `uv add -r <requirements file>`
-- If `pyproject.toml` already exists: just `uv add -r <requirements file>` to import the deps
+- If there is no `pyproject.toml` yet: `uv init --bare`, which creates `pyproject.toml` and nothing else — no sample code, build backend, `README.md`, `.python-version` or git repository.
+- Then `uv add -r <requirements file>`, which imports the requirements into the project's dependencies, writes `uv.lock` and installs `.venv`.
 
-You'll be prompted to confirm before anything is executed.
+**Development requirements go in uv's dev group.** When the file's name marks it as development requirements — `requirements-dev.txt`, `requirements_test.txt`, `requirements/dev.txt`, `requirements/local.txt` and the like (dev, test, lint, docs or local in the name) — the confirmation offers **Dev Group** first, which imports it with `uv add --dev -r`, and **Main Dependencies** as the alternative. A name that says neither, such as `requirements-ml.txt`, gets both choices with Main Dependencies first. `requirements.txt` itself, and runtime files such as `requirements/base.txt`, always go into the project's dependencies.
+
+**A development file that includes `requirements.txt` is split the right way.** Most start with `-r requirements.txt`, and uv follows that line, so a dev-group import alone would copy every runtime package into the dev group too. Instead, Dev Group first imports the included file into the project's dependencies, then the development file into the dev group, then takes the included packages back out of it with `uv remove --dev`. Packages the development file lists itself stay in the dev group, so one click on `requirements-dev.txt` migrates both files.
+
+Your requirements files are read, never changed; unsaved changes to the open one are saved first, so uv imports what you see. `uv init --bare` needs uv 0.5.29 or newer. uv sets `requires-python` from the Python it finds, and the [Python version quick fix](#-python-version-selection-pyprojecttoml-only) changes it.
 
 ### ⚡ Quick Fix: Upgrade to Latest
 
@@ -104,7 +108,7 @@ Run common `uv` commands directly from the command palette (`Cmd+Shift+P`):
 | `UV: Run` | Run a command via `uv run` |
 | `UV: Show Dependencies` | Open the dependency dashboard |
 | `UV: Check Dependencies for Security Advisories` | Run a one-off OSV check on the active file, regardless of `uv.security.enabled` |
-| `UV: Convert requirements.txt to uv project` | Run `uv init` (if needed) and `uv add -r <file>` &mdash; only shown when a `requirements.txt` is active |
+| `UV: Convert requirements.txt to uv project` | Run `uv init --bare` (if needed) and `uv add -r <file>`, or `uv add --dev -r <file>` for development requirements &mdash; only shown when a requirements file is active |
 
 ## Settings
 

@@ -5,6 +5,42 @@ All notable changes to **Practical UV** are documented in this file.
 Releases before 0.1.9 predate this file and are not documented here; see the
 git history for details.
 
+## [Unreleased]
+
+### Changed
+
+- **Converting a pip project no longer adds files you did not ask for.** When
+  there is no `pyproject.toml` yet, **Convert to uv** now runs
+  `uv init --bare`, which creates `pyproject.toml` and nothing else. It used
+  to run plain `uv init`, which in current uv versions also creates a `src/`
+  package with a hello-world entry point, a build backend, `README.md`,
+  `.python-version` and a git repository — inside the project you were
+  migrating. Needs uv 0.5.29 or newer.
+
+- **Development requirements go into uv's dev group.** Converting a file
+  whose name marks it as development requirements — `requirements-dev.txt`,
+  `requirements_test.txt`, `requirements/dev.txt`, `requirements/local.txt`
+  and the like — now offers **Dev Group** first, which imports it with
+  `uv add --dev -r`, and **Main Dependencies** as the alternative. Such files
+  used to land in the project's main dependencies. A file whose name says
+  neither gets both choices, main first; `requirements.txt` itself is never
+  asked about.
+
+- **A development file that includes `requirements.txt` is split the right
+  way.** uv follows the `-r requirements.txt` line most development files
+  start with, so a dev-group import alone would copy every runtime package
+  into the dev group as well. The conversion now imports the included file
+  into the project's dependencies first, then takes those packages back out
+  of the dev group, which ends up holding only what the development file
+  lists itself. One click on `requirements-dev.txt` migrates both files.
+
+- The confirmation now lists the exact commands each choice runs.
+
+### Fixed
+
+- Converting a requirements file with unsaved changes imported the version on
+  disk, leaving the edits out. The file is now saved first.
+
 ## [0.2.0]
 
 ### Added

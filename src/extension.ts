@@ -22,6 +22,14 @@ import {
     parseUvLock,
     resolveVersion,
 } from './audit';
+import {
+    IncludedRequirements,
+    classifyRequirementsFile,
+    collectMainIncludes,
+    convertChoices,
+    convertCommands,
+    convertPrompt,
+} from './convert';
 
 const pypiCache = new Map<string, any>();
 
@@ -410,7 +418,7 @@ export function activate(context: vscode.ExtensionContext) {
 
     const convertStatusBar = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100);
     convertStatusBar.text = '$(arrow-up) Convert to uv';
-    convertStatusBar.tooltip = 'Run uv init / uv add -r on this requirements.txt';
+    convertStatusBar.tooltip = 'Import this requirements file into a uv project (asks before running anything)';
     convertStatusBar.command = 'uv.convertToUv';
     context.subscriptions.push(convertStatusBar);
 
@@ -1057,7 +1065,8 @@ export function activate(context: vscode.ExtensionContext) {
             return;
         }
 
-        const reqUri = editor.document.uri;
+        const document = editor.document;
+        const reqUri = document.uri;
         const folder = vscode.workspace.getWorkspaceFolder(reqUri);
         if (!folder) {
             vscode.window.showWarningMessage('requirements.txt must be inside an open workspace folder.');
@@ -1073,15 +1082,57 @@ export function activate(context: vscode.ExtensionContext) {
             hasPyproject = false;
         }
 
-        const reqRel = path.relative(folder.uri.fsPath, reqUri.fsPath) || path.basename(reqUri.fsPath);
-        const reqArg = /\s/.test(reqRel) ? `"${reqRel}"` : reqRel;
+        const relative = (fsPath: string) => path.relative(folder.uri.fsPath, fsPath) || path.basename(fsPath);
+        const reqRel = relative(reqUri.fsPath);
+        const choices = convertChoices(classifyRequirementsFile(reqUri.fsPath));
 
-        const message = hasPyproject
-            ? `pyproject.toml already exists in ${folder.name}. Run "uv add -r ${reqRel}" to import dependencies?`
-            : `Initialize a uv project in ${folder.name} ("uv init") and import dependencies from ${reqRel}?`;
+        // Only a dev-group import needs to know what the file includes: those
+        // packages belong in the project's dependencies, not in the dev group.
+        // uv reads included files from disk, so they are read from disk here too.
+        let included: IncludedRequirements = { mainIncludes: [], inheritedPackages: [] };
+        if (choices.some(c => c.target === 'dev')) {
+            included = await collectMainIncludes(reqUri.fsPath, document.getText(), async (fsPath) => {
+                try {
+                    return Buffer.from(await vscode.workspace.fs.readFile(vscode.Uri.file(fsPath))).toString('utf8');
+                } catch {
+                    return undefined;
+                }
+            });
+        }
+        const mainIncludes = included.mainIncludes.map(relative);
+        const commands = {
+            main: convertCommands({ hasPyproject, requirementsPath: reqRel, target: 'main' }),
+            dev: convertCommands({
+                hasPyproject,
+                requirementsPath: reqRel,
+                target: 'dev',
+                mainIncludes,
+                inheritedPackages: included.inheritedPackages,
+            }),
+        };
 
-        const choice = await vscode.window.showInformationMessage(message, { modal: true }, 'Convert');
-        if (choice !== 'Convert') {
+        const prompt = convertPrompt({
+            folderName: folder.name,
+            requirementsPath: reqRel,
+            choices,
+            commands,
+            mainIncludes,
+            unsaved: document.isDirty,
+        });
+        const picked = await vscode.window.showInformationMessage(
+            prompt.message,
+            { modal: true, detail: prompt.detail },
+            ...choices.map(c => c.label),
+        );
+        const choice = choices.find(c => c.label === picked);
+        if (!choice) {
+            return;
+        }
+
+        // uv reads the file from disk. Save first, so it imports what is on
+        // screen — which is also what the commands above were worked out from.
+        if (document.isDirty && !(await document.save())) {
+            vscode.window.showWarningMessage(`${reqRel} could not be saved, so nothing was run.`);
             return;
         }
 
@@ -1090,10 +1141,9 @@ export function activate(context: vscode.ExtensionContext) {
             terminal = vscode.window.createTerminal({ name: 'uv', cwd: folder.uri.fsPath });
         }
         terminal.show();
-        if (!hasPyproject) {
-            terminal.sendText('uv init');
+        for (const command of commands[choice.target]) {
+            terminal.sendText(command);
         }
-        terminal.sendText(`uv add -r ${reqArg}`);
     });
 
     context.subscriptions.push(uvSyncCmd, uvAddCmd, uvRunCmd, pypiHoverProvider, pypiCodeActionProvider, securityCodeActionProvider, versionBumpProvider, upgradeVersionCmd, selectVersionCmd, selectPythonVersionCmd, showDependenciesCmd, checkSecurityCmd, checkPackageSecurityCmd, convertToUvCmd);
