@@ -5,7 +5,7 @@ All notable changes to **Practical UV** are documented in this file.
 Releases before 0.1.9 predate this file and are not documented here; see the
 git history for details.
 
-## [Unreleased]
+## [0.2.1]
 
 ### Changed
 
