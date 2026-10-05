@@ -150,7 +150,7 @@ Practical UV is built by [Wizhut.tech](https://wizhut.tech). We make sharp, focu
 | Product | What it does |
 |---|---|
 | **[EasyHomebrew](https://easyhomebrew.wizhut.tech)** | Supply-chain hygiene for your Mac: a native Homebrew manager that scans everything you've installed against a live CVE database and keeps watching for new advisories. macOS 14+, €10 one-time. |
-| **[Contain](https://wizhut.tech/contain)** | Gathers macOS windows you already have open into one window with tabs — one tab per window, put back exactly where it was when you release it. macOS 13+, free public beta (the current build is time-limited). |
+| **[Contain](https://wizhut.tech/contain)** | Gathers macOS windows you already have open into one window with tabs — one tab per window, put back exactly where it was when you release it. macOS 13+, €6 one-time for three Macs, or on Setapp. |
 | **[Promptivo](https://promptivo.wizhut.tech)** | Scores AI prompts across seven quality dimensions, deterministically — no model calls, no latency, no per-evaluation cost. Grounded in peer-reviewed research. |
 | **[Cloudproc](https://cloudproc.io)** | Application-level observability: metrics, traces, and logs in one dashboard, with alerting that cuts noise rather than adding to it. |
 
@@ -166,7 +166,7 @@ npm run compile
 # Watch for changes
 npm run watch
 
-# Run unit tests (parser, requirements.txt, security audit)
+# Run unit tests (parser, requirements.txt, security audit, uv conversion)
 npm test
 
 # Build .vsix for both registries (output in dist/)
