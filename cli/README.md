@@ -61,6 +61,16 @@ convertCommands({ hasPyproject: false, requirementsPath: 'requirements.txt', tar
 // [ 'uv init --bare', 'uv add -r requirements.txt' ]
 ```
 
+## About Wizhut.tech
+
+practical-uv is developed and maintained by [Wizhut.tech](https://wizhut.tech). We make sharp, focused software that removes busywork from the working day, and our tools are meant to stay out of your way.
+
+- **[Practical UV for VS Code](https://wizhut.tech/practical-uv)**: this conversion plus outdated-dependency checks, security advisories from OSV, hover info and version pickers for `pyproject.toml` and `requirements.txt`. On the [VS Code Marketplace](https://marketplace.visualstudio.com/items?itemName=wizhut-tech.wiz-practical-uv) and [Open VSX](https://open-vsx.org/extension/wizhut/uv-vscode).
+- **[Kyori](https://wizhut.tech/kyori)** ([`@wizhut_tech/kyori`](https://www.npmjs.com/package/@wizhut_tech/kyori)): string distance and similarity for JavaScript, with a ranking score for autocomplete.
+- **[WizJS](https://wizhut.tech/wizjs)** ([`@wizhut_tech/wizjs`](https://www.npmjs.com/package/@wizhut_tech/wizjs)): everyday JavaScript utilities with zero runtime dependencies.
+
+More at [wizhut.tech](https://wizhut.tech). Source and issues: [github.com/wizhut/uv-vscode](https://github.com/wizhut/uv-vscode) (the CLI lives in `cli/`).
+
 ## License
 
 MIT

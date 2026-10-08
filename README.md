@@ -150,7 +150,7 @@ Practical UV is built by [Wizhut.tech](https://wizhut.tech). We make sharp, focu
 
 | Project | What it does |
 |---|---|
-| **[Practical UV](https://wizhut.tech/practical-uv)** | This extension — `uv` and pip dependency management inside VS Code. |
+| **[Practical UV](https://wizhut.tech/practical-uv)** | This extension — `uv` and pip dependency management inside VS Code. Its pip → uv conversion is also a CLI: [`@wizhut_tech/practical-uv`](https://www.npmjs.com/package/@wizhut_tech/practical-uv) |
 | **[Kyori](https://wizhut.tech/kyori)** | String distance and similarity for JavaScript: Levenshtein, Hamming, Damerau-Levenshtein, Jaro-Winkler, plus a token-sensitive ranking score for autocomplete. [`@wizhut_tech/kyori`](https://www.npmjs.com/package/@wizhut_tech/kyori) |
 | **[WizJS](https://wizhut.tech/wizjs)** | Curated everyday JavaScript utilities organised by namespace, without becoming another lodash. Zero runtime dependencies. [`@wizhut_tech/wizjs`](https://www.npmjs.com/package/@wizhut_tech/wizjs) |
 | **[json2jsonl](https://wizhut.tech/json2jsonl)** | A pipe-friendly CLI that converts one or many JSON files into a single JSONL stream. One static binary. |
