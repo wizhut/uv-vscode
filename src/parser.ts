@@ -1,4 +1,5 @@
 import * as TOML from '@iarna/toml';
+import { normalizePackageName } from './names';
 
 const PEP508_REGEX = /^([a-zA-Z0-9_][a-zA-Z0-9._\-]*(?:\[.*?\])?)\s*(?:(>=|<=|~=|==|!=|>|<|===)\s*([0-9][0-9a-zA-Z\.\*]*))?$/;
 
@@ -28,10 +29,7 @@ export interface SnapshotState {
     dependencyVersions: Map<string, string>;
 }
 
-// PEP 503: lowercase, and collapse runs of -_. into a single -
-export function normalizePackageName(name: string): string {
-    return name.trim().toLowerCase().replace(/[-_.]+/g, '-');
-}
+export { normalizePackageName } from './names';
 
 export function parsePep508(spec: string): DepSpec | null {
     const m = spec.trim().match(PEP508_REGEX);

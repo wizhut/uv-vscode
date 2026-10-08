@@ -123,6 +123,7 @@
         "vscode:prepublish": "npm run compile",
         "compile": "tsc -p ./",
         "watch": "tsc -watch -p ./",
+        "build:cli": "tsc -p cli",
         "pretest": "npm run compile",
         "test": "node --test out/test/*.test.js"
     },

@@ -1,0 +1,63 @@
+name: Release CLI
+
+# Tag-driven, separately from the extension: pushing cli-v<x.y.z> runs the
+# suite and publishes @wizhut_tech/practical-uv (cli/) to npm. Cut one with:
+#   (cd cli && npm version patch --no-git-tag-version)
+#   git commit -am "chore: release cli <x.y.z>" && git tag cli-v<x.y.z> && git push --follow-tags
+# The extension's release.yml matches v*, which cli-v* tags do not.
+on:
+  push:
+    tags:
+      - "cli-v*"
+
+permissions:
+  contents: write # gh release create
+  id-token: write # npm trusted publishing (OIDC)
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      # Do not set registry-url here: setup-node would write an .npmrc with an
+      # empty _authToken and that short-circuits npm OIDC trusted publishing.
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "24"
+
+      - name: Check the tag matches cli/package.json
+        run: |
+          tag="${GITHUB_REF_NAME#cli-v}"
+          pkg="$(node -p "require('./cli/package.json').version")"
+          if [ "$tag" != "$pkg" ]; then
+            echo "::error::tag $GITHUB_REF_NAME does not match cli/package.json version $pkg"
+            exit 1
+          fi
+
+      # The CLI is built from ../src with the root's TypeScript.
+      - name: Install dependencies
+        run: |
+          if [ -f package-lock.json ]; then npm ci; else npm install --no-fund; fi
+
+      - run: npm test # pretest compiles
+
+      # Trusted publishing: npmjs.com trusts this repo's release-cli.yml, so
+      # there is no NPM_TOKEN. Needs npm >= 11.5.1, hence the upgrade.
+      # prepack builds cli/dist and copies the LICENSE in.
+      - name: Publish to npm
+        working-directory: cli
+        run: |
+          npm install -g npm@latest
+          npm publish --access public
+
+      - name: Publish the GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            --title "practical-uv CLI ${GITHUB_REF_NAME#cli-}" \
+            --generate-notes

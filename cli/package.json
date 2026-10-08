@@ -1,0 +1,53 @@
+{
+    "name": "@wizhut_tech/practical-uv",
+    "version": "0.1.0",
+    "description": "Convert a pip project (requirements.txt) into a uv project, from the command line — the conversion behind the Practical UV VS Code extension",
+    "license": "MIT",
+    "author": "Vassilios Karakoidas <vassilios.karakoidas@wizhut.tech>",
+    "homepage": "https://wizhut.tech/practical-uv",
+    "repository": {
+        "type": "git",
+        "url": "git+https://github.com/wizhut/uv-vscode.git",
+        "directory": "cli"
+    },
+    "bugs": {
+        "url": "https://github.com/wizhut/uv-vscode/issues"
+    },
+    "keywords": [
+        "uv",
+        "pip",
+        "requirements.txt",
+        "pyproject.toml",
+        "python",
+        "migration",
+        "cli"
+    ],
+    "bin": {
+        "practical-uv": "dist/cli.js"
+    },
+    "main": "dist/convert.js",
+    "types": "dist/convert.d.ts",
+    "exports": {
+        ".": {
+            "types": "./dist/convert.d.ts",
+            "default": "./dist/convert.js"
+        },
+        "./cli": {
+            "types": "./dist/cli.d.ts",
+            "default": "./dist/cli.js"
+        },
+        "./package.json": "./package.json"
+    },
+    "files": [
+        "dist",
+        "README.md",
+        "LICENSE"
+    ],
+    "engines": {
+        "node": ">=18"
+    },
+    "scripts": {
+        "build": "node ../node_modules/typescript/bin/tsc -p .",
+        "prepack": "npm run build && node -e \"require('fs').copyFileSync('../LICENSE','LICENSE')\""
+    }
+}

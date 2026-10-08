@@ -1,0 +1,14 @@
+{
+    // Builds the npx package from the shared sources in ../src: cli.ts and
+    // what it imports (convert.ts, names.ts) — never parser.ts, which needs
+    // @iarna/toml, or anything that imports vscode.
+    "extends": "../tsconfig.json",
+    "compilerOptions": {
+        "rootDir": "../src",
+        "outDir": "dist",
+        "sourceMap": false,
+        "declaration": true
+    },
+    "files": ["../src/cli.ts"],
+    "include": []
+}

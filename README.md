@@ -62,6 +62,16 @@ They run in the integrated terminal, at the workspace folder root:
 
 Your requirements files are read, never changed; unsaved changes to the open one are saved first, so uv imports what you see. `uv init --bare` needs uv 0.5.29 or newer. uv sets `requires-python` from the Python it finds, and the [Python version quick fix](#-python-version-selection-pyprojecttoml-only) changes it.
 
+#### From the command line
+
+The same conversion is on npm as a standalone CLI, for projects you don't open in VS Code or for scripts:
+
+```bash
+npx @wizhut_tech/practical-uv convert requirements-dev.txt
+```
+
+It prints the same commands, asks once (`--yes` skips the question, `--dry-run` only prints), and runs uv in the current folder. See [cli/README.md](cli/README.md).
+
 ### ⚡ Quick Fix: Upgrade to Latest
 
 Click the lightbulb (or press `Cmd+.` / `Ctrl+.`) on an outdated dependency to instantly upgrade it to the latest version. The same menu offers a per-dependency security check — see [Security Advisories](#️-security-advisories-opt-in).

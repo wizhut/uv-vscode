@@ -39,3 +39,7 @@ vsc-extension-quickstart.md
 
 # TypeScript source in out (if any .ts ends up there)
 out/**/*.ts
+
+# The npx CLI ships as its own npm package (cli/), not in the extension
+cli/**
+out/cli.js

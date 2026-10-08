@@ -3,7 +3,7 @@
 // other files, the exact uv commands to run, and the confirmation that lists
 // them. No `vscode` imports, so it stays unit-testable (src/test/convert.test.ts).
 import * as path from 'path';
-import { normalizePackageName } from './parser';
+import { normalizePackageName } from './names';
 
 /** What a requirements file's name says about its contents. */
 export type RequirementsKind = 'main' | 'dev' | 'other';
