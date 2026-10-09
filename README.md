@@ -1,6 +1,46 @@
+<p align="center">
+  <img src="icon.png" width="128" height="128" alt="Practical UV">
+</p>
+
 # Practical UV
 
-A VS Code extension for working with Python dependency files. Supports both [uv](https://github.com/astral-sh/uv) / PEP 621 `pyproject.toml` and pip's `requirements.txt`. Provides TOML syntax highlighting, dependency version management via PyPI, known-vulnerability detection via the OSV advisory database, and project version bumping.
+A VS Code extension for working with Python dependency files. Supports both [uv](https://github.com/astral-sh/uv) / PEP 621 `pyproject.toml` and pip's `requirements.txt`. Provides TOML syntax highlighting, dependency version management via PyPI, known-vulnerability detection via the OSV advisory database, project version bumping, and a one-click move from pip to uv — which is also a command-line tool, [`@wizhut_tech/practical-uv`](https://www.npmjs.com/package/@wizhut_tech/practical-uv), for any terminal.
+
+## Made by Wizhut.tech
+
+Practical UV is built by [Wizhut.tech](https://wizhut.tech): Mac apps, open-source developer tools and games, each one small and focused, plus [Wizhut Research](https://research.wizhut.tech/labs), where experiments are built as products you can use and their measurements are published beside them.
+
+**Apps**
+
+| Product | What it does |
+|---|---|
+| **[EasyHomebrew](https://easyhomebrew.wizhut.tech)** | Supply-chain hygiene for your Mac. Every installed Homebrew package is checked against a live CVE database, a menu-bar agent watches for new advisories, and a complete native package manager sits underneath. macOS 14+, €10 once. |
+| **[Contain](https://wizhut.tech/contain)** | One window for the windows you already have open. Each one gets a tab, and letting it go puts it back at the exact position, size and screen it came from. macOS 13+, €6 once for three Macs, or on Setapp. |
+| **[WizLook](https://wizhut.tech/wizlook)** | Quick Look previews for the files your Mac leaves blank: press Space in the Finder on an Excalidraw drawing, a Jupyter notebook, a canvas or a JSON file and see what is inside, or open it read-only in the app. macOS 14+, €6 once. |
+
+**Open source**
+
+| Project | What it does |
+|---|---|
+| **[Practical UV](https://wizhut.tech/practical-uv)** | This extension, and its pip → uv conversion as a CLI: [`@wizhut_tech/practical-uv`](https://www.npmjs.com/package/@wizhut_tech/practical-uv). |
+| **[Kyori](https://wizhut.tech/kyori)** | String distance and similarity for JavaScript — the classic metrics, plus a ranking score built for autocomplete that folds case and accents and survives typos. [`@wizhut_tech/kyori`](https://www.npmjs.com/package/@wizhut_tech/kyori) |
+| **[WizJS](https://wizhut.tech/wizjs)** | Everyday JavaScript utilities without becoming another lodash — Python's itertools, functools and collections, ported to JS with zero runtime dependencies. [`@wizhut_tech/wizjs`](https://www.npmjs.com/package/@wizhut_tech/wizjs) |
+| **[json2jsonl](https://wizhut.tech/json2jsonl)** | Turns one or many JSON files into a single JSON Lines output, so it pipes into whatever comes next. One static binary. |
+| **[trimmer](https://wizhut.tech/trimmer)** | Strips the leading and trailing whitespace from whatever it reads — the whole input, or every line on its own. One static binary. |
+
+**Research**
+
+| Experiment | What it asks |
+|---|---|
+| **[Kyori](https://research.wizhut.tech/labs/kyori)** | How well a string score alone can order an autocomplete list, measured on real searches against the libraries applications already use. |
+| **[Promptivo](https://research.wizhut.tech/labs/promptivo)** | Whether an AI prompt's quality can be measured without asking a model to judge it, so the same prompt always gets the same score. [Free to use](https://promptivo.wizhut.tech). |
+
+**Games**
+
+| Game | What it is |
+|---|---|
+| **[Whokoban](https://gaming.wizhut.tech/whokoban)** | Sokoban for iPhone with one rule changed: filling every goal unlocks the exit, and Whoko still has to walk out through the warehouse he has just rearranged. |
+| **[Showcase](https://gaming.wizhut.tech/showcase)** | Every game you own on Steam, GOG, Epic Games, PlayStation, Xbox and Nintendo in one library on your Windows PC. Free. |
 
 ## Features
 
@@ -141,28 +181,6 @@ In `requirements.txt` (and the variants listed above), each line is parsed as a 
 
 - VS Code `^1.125.0`
 - Internet access for PyPI lookups, and for `api.osv.dev` if security checking is enabled
-
-## About Wizhut.tech
-
-Practical UV is built by [Wizhut.tech](https://wizhut.tech). We make sharp, focused software that removes busywork from the working day — lean open-source libraries at one end, full-platform observability and AI tooling at the other. The common thread is that our tools are meant to stay out of your way.
-
-### Open source
-
-| Project | What it does |
-|---|---|
-| **[Practical UV](https://wizhut.tech/practical-uv)** | This extension — `uv` and pip dependency management inside VS Code. Its pip → uv conversion is also a CLI: [`@wizhut_tech/practical-uv`](https://www.npmjs.com/package/@wizhut_tech/practical-uv) |
-| **[Kyori](https://wizhut.tech/kyori)** | String distance and similarity for JavaScript: Levenshtein, Hamming, Damerau-Levenshtein, Jaro-Winkler, plus a token-sensitive ranking score for autocomplete. [`@wizhut_tech/kyori`](https://www.npmjs.com/package/@wizhut_tech/kyori) |
-| **[WizJS](https://wizhut.tech/wizjs)** | Curated everyday JavaScript utilities organised by namespace, without becoming another lodash. Zero runtime dependencies. [`@wizhut_tech/wizjs`](https://www.npmjs.com/package/@wizhut_tech/wizjs) |
-| **[json2jsonl](https://wizhut.tech/json2jsonl)** | A pipe-friendly CLI that converts one or many JSON files into a single JSONL stream. One static binary. |
-
-### Apps and platforms
-
-| Product | What it does |
-|---|---|
-| **[EasyHomebrew](https://easyhomebrew.wizhut.tech)** | Supply-chain hygiene for your Mac: a native Homebrew manager that scans everything you've installed against a live CVE database and keeps watching for new advisories. macOS 14+, €10 one-time. |
-| **[Contain](https://wizhut.tech/contain)** | Gathers macOS windows you already have open into one window with tabs — one tab per window, put back exactly where it was when you release it. macOS 13+, €6 one-time for three Macs, or on Setapp. |
-| **[Promptivo](https://promptivo.wizhut.tech)** | Scores AI prompts across seven quality dimensions, deterministically — no model calls, no latency, no per-evaluation cost. Grounded in peer-reviewed research. |
-| **[Cloudproc](https://cloudproc.io)** | Application-level observability: metrics, traces, and logs in one dashboard, with alerting that cuts noise rather than adding to it. |
 
 ## Development
 
