@@ -128,10 +128,10 @@
         "test": "node --test out/test/*.test.js"
     },
     "devDependencies": {
-        "@types/node": "^26.1.1",
-        "@types/vscode": "^1.125.0",
-        "@vscode/vsce": "^3.9.2",
-        "typescript": "^6.0.3"
+        "@types/node": "^26.6.4",
+        "@types/vscode": "~1.125.0",
+        "@vscode/vsce": "^4.0.0",
+        "typescript": "^7.0.2"
     },
     "dependencies": {
         "@iarna/toml": "^2.2.5"
