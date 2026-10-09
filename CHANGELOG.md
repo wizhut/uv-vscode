@@ -5,6 +5,28 @@ All notable changes to **Practical UV** are documented in this file.
 Releases before 0.1.9 predate this file and are not documented here; see the
 git history for details.
 
+## [0.2.2]
+
+### Changed
+
+- **A new icon.** A list of requirements, an arrow and a package — pip to
+  uv — in white on teal, the same icon wizhut.tech now uses for Practical
+  UV.
+
+- **Updated packages.** The tools the extension is built and packaged with
+  are on their latest versions — TypeScript 7, `@vscode/vsce` 4 and the
+  current Node.js type definitions — which also clears every known
+  vulnerability `npm audit` reported in them. None of them ship inside the
+  extension; its one runtime dependency, `@iarna/toml`, was already current.
+  It still runs on VS Code 1.125 and later.
+
+- **A smaller download.** The extension's original high-resolution artwork
+  is no longer packaged, which takes the download from about 500 KB to
+  90 KB.
+
+- The README opens with the icon and a section on Wizhut.tech, now up to
+  date with what the company makes.
+
 ## [0.2.1]
 
 ### Changed
