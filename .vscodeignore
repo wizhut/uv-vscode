@@ -18,6 +18,8 @@ node_modules/**
 out/test/**
 
 # Build artifacts & packaging
+# The extension's original 640px artwork, kept in the repo, never referenced
+icon 2.png
 *.vsix
 package-lock.json
 dist/**
